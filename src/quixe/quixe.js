@@ -182,6 +182,7 @@ function quixe_prepare(image, all_options) {
    (It's inelegant to call this "init" when the "prepare" function must
    be called first. Sorry about that.)
 */
+var _xxx_vm;  // XXX this needs to be global for the sake of quixe_resume
 function quixe_init() {
     if (vm_started) {
         Glk.fatal_error("Quixe was inited twice!");
@@ -192,9 +193,9 @@ function quixe_init() {
         setup_bytestring_table();
         setup_operandlist_table();
 
-        var vm = new VM();
+        var vm = _xxx_vm = new VM();
         vm.setup();
-        execute_loop();
+        vm.execute_loop();
     }
     catch (ex) {
         qstackdump();
@@ -211,7 +212,7 @@ function quixe_init() {
 function quixe_resume() {
     try {
         done_executing = vm_stopped;
-        execute_loop();
+        _xxx_vm.execute_loop();
     }
     catch (ex) {
         qstackdump();
@@ -1299,7 +1300,7 @@ function oputil_perform_jump(context, operand, unconditional) {
                 ;;;context.code.push("// ignoring offstack for conditional return: " + context.offstack.length); //debug
             }
             context.code.push("leave_function();");
-            context.code.push("pop_callstub("+val+");");
+            context.code.push("vm.pop_callstub("+val+");");
         }
         else {
             oputil_unload_offstate(context, !unconditional);
@@ -1312,7 +1313,7 @@ function oputil_perform_jump(context, operand, unconditional) {
         oputil_unload_offstate(context, !unconditional);
         context.code.push("if (("+operand+")===0 || ("+operand+")===1) {");
         context.code.push("leave_function();");
-        context.code.push("pop_callstub("+operand+");");
+        context.code.push("vm.pop_callstub("+operand+");");
         context.code.push("}");
         context.code.push("else {");
         context.code.push("pc = ("+context.cp+"+("+operand+")-2) >>>0;");
@@ -1638,7 +1639,7 @@ var opcode_table = {
         context.offloc.length = 0;
         context.offlocdirty.length = 0;
         context.code.push("leave_function();");
-        context.code.push("pop_callstub("+operands[0]+");");
+        context.code.push("vm.pop_callstub("+operands[0]+");");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -1659,7 +1660,7 @@ var opcode_table = {
         context.offloc.length = 0;
         context.offlocdirty.length = 0;
         context.code.push("pop_stack_to("+operands[1]+");");
-        context.code.push("pop_callstub("+operands[0]+");");
+        context.code.push("vm.pop_callstub("+operands[0]+");");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -2084,7 +2085,7 @@ var opcode_table = {
         context.varsused["ix"] = true;
         oputil_push_callstub(context, operands[1]);
         context.code.push("ix = vm_save("+operands[0]+");");
-        context.code.push("pop_callstub(ix ? 0 : 1);");
+        context.code.push("vm.pop_callstub(ix ? 0 : 1);");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -2094,7 +2095,7 @@ var opcode_table = {
         context.code.push("if (vm_restore("+operands[0]+")) {");
         /* Succeeded. Pop the call stub that save pushed, using -1
            to indicate success. */
-        context.code.push("pop_callstub((-1)>>>0);");
+        context.code.push("vm.pop_callstub((-1)>>>0);");
         context.code.push("} else {");
         /* Failed to restore. Put back the PC, in case it got overwritten. */
         oputil_store(context, operands[1], "1");
@@ -2110,7 +2111,7 @@ var opcode_table = {
         oputil_push_callstub(context, operands[0]);
         context.code.push("vm_saveundo();");
         /* Any failure was a fatal error, so we return success. */
-        context.code.push("pop_callstub(0);");
+        context.code.push("vm.pop_callstub(0);");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -2120,7 +2121,7 @@ var opcode_table = {
         context.code.push("if (vm_restoreundo()) {");
         /* Succeeded. Pop the call stub that saveundo pushed, using -1
            to indicate success. */
-        context.code.push("pop_callstub((-1)>>>0);");
+        context.code.push("vm.pop_callstub((-1)>>>0);");
         context.code.push("} else {");
         /* Failed to restore. Put back the PC, in case it got overwritten. */
         oputil_store(context, operands[0], "1");
@@ -2263,7 +2264,7 @@ var opcode_table = {
            determined to be a function, we can unload and return.)
         */
         oputil_unload_offstate(context);
-        context.code.push("if (stream_string("+context.cp+","+operands[0]+", 0, 0)) return;");
+        context.code.push("if (vm.stream_string("+context.cp+","+operands[0]+", 0, 0)) return;");
     },
 
     0x73: function(context, operands) { /* streamunichar */
@@ -3567,7 +3568,7 @@ VM.prototype.enter_function = function(addr, argcount) {
     if (accelfunc !== undefined) {
         accel_function_calls++; //###stats
         var val = accelfunc(argcount, tempcallargs);
-        pop_callstub(val);
+        this.pop_callstub(val);
         return;
     }
 
@@ -3665,7 +3666,7 @@ function pop_stack_to(val) {
    call wants it. The pc winds up pointing after the function call
    opcode.)
 */
-function pop_callstub(val) {
+VM.prototype.pop_callstub = function(val) {
     var destaddr, desttype;
 
     //qlog("### return value " + val.toString(16));
@@ -3700,7 +3701,7 @@ function pop_callstub(val) {
     case 0x10:
         /* This call stub was pushed during a string-decoding operation!
            We have to restart it. (Note that the return value is discarded.) */
-        stream_string(0, pc, 0xE1, destaddr);
+        vm.stream_string(0, pc, 0xE1, destaddr);
         return;
 
     case 0x12:
@@ -3712,19 +3713,19 @@ function pop_callstub(val) {
     case 0x13:
         /* This call stub was pushed during a C-string printing operation.
            We have to restart it. (Note that the return value is discarded.) */
-        stream_string(0, pc, 0xE0, destaddr);
+        vm.stream_string(0, pc, 0xE0, destaddr);
         return;
 
     case 0x14:
         /* This call stub was pushed during a Unicode printing operation.
            We have to restart it. (Note that the return value is discarded.) */
-        stream_string(0, pc, 0xE2, destaddr);
+        vm.stream_string(0, pc, 0xE2, destaddr);
         return;
 
     default:
         fatal_error("Unrecognized desttype in callstub.", desttype);
     }
-}
+};
 
 /* Do the value-storing part of an already-popped call stub. (This is a
    subset of the pop_callstub() work.)
@@ -4519,7 +4520,7 @@ function stream_num(nextcp, value, inmiddle, charnum) {
    simple case, where the caller began at the start of a string and the
    whole thing got printed.
 */
-function stream_string(nextcp, addr, inmiddle, bitnum) {
+VM.prototype.stream_string = function(nextcp, addr, inmiddle, bitnum) {
     var substring = (inmiddle !== 0);
     var addrkey, strop, res;
     var desttype, destaddr;
@@ -4555,8 +4556,7 @@ function stream_string(nextcp, addr, inmiddle, bitnum) {
                 return false;
         }
         else {
-            var vm = new VM();  // XXX uggh
-            res = strop(vm, nextcp, substring);
+            res = strop(this, nextcp, substring);
             if (res instanceof Array) {
                 /* Entered a substring */
                 substring = true;
@@ -4598,7 +4598,7 @@ function stream_string(nextcp, addr, inmiddle, bitnum) {
             fatal_error("Function-terminator call stub at end of string.");
         }
     }
-}
+};
 
 /* Generate a function which outputs the string, or rather one path of it.
    Like function paths, a string path only runs up to the first internal
@@ -5417,7 +5417,6 @@ var ramstart;
 var endgamefile;   // always game_image.length
 var origendmem;
 var stacksize;     // not used -- we allow the stack to grow as needed
-var startfuncaddr;
 var origstringtable;
 var checksum;
 
@@ -5479,7 +5478,7 @@ VM.prototype.setup = function() {
     endgamefile = ByteRead4(game_image, 12);
     origendmem = ByteRead4(game_image, 16);
     stacksize = ByteRead4(game_image, 20);
-    startfuncaddr = ByteRead4(game_image, 24);
+    this.startfuncaddr = ByteRead4(game_image, 24);
     origstringtable = ByteRead4(game_image, 28);
     checksum = ByteRead4(game_image, 32);
 
@@ -5547,7 +5546,7 @@ VM.prototype.restart = function() {
     /* Note that we do not reset the protection range. */
 
     /* Push the first function call. (No arguments.) */
-    this.enter_function(startfuncaddr, 0);
+    this.enter_function(this.startfuncaddr, 0);
     qlog(this.stack, stack);
 
     /* We're now ready to execute. */
@@ -6342,7 +6341,7 @@ function parse_inform_debug_data(datachunknum) {
 /* Begin executing code, compiling as necessary. When glk_select is invoked,
    or the game ends, this calls Glk.update() and exits.
 */
-function execute_loop() {
+VM.prototype.execute_loop = function() {
     var vmfunc, pathtab, path;
     var pathstart, pathend;
 
@@ -6355,11 +6354,10 @@ function execute_loop() {
 
     pathstart = new Date().getTime(); //###stats
 
-    var vm = new VM();
 
     while (!done_executing) {
         //qlog("### pc now " + pc.toString(16));
-        vmfunc = vm.current_frame().vmfunc;
+        vmfunc = this.current_frame().vmfunc;
         pathtab = vmfunc[iosysmode];
         path = pathtab[pc];
         if (path === undefined) {
@@ -6373,7 +6371,7 @@ function execute_loop() {
         }
         total_path_calls++; //###stats
         try {
-            path(vm);
+            path(this);
         }
         catch (ex) {
             if (ex === ReturnedFromMain) {
@@ -6399,7 +6397,7 @@ function execute_loop() {
     Glk.update();
 
     qlog("### done executing; path time = " + (pathend-pathstart) + " ms");
-}
+};
 
 /* End of Quixe namespace function. Return the object which will
    become the Quixe global. */
