@@ -59,6 +59,88 @@
 
 Quixe = function() {
 
+/* Light abstraction over a memory space -- a sequence of bytes.  This mostly
+   exists so that modern browsers can use typed arrays, while older browsers
+   can fall back to regular arrays of integers, without having to sprinkle
+   checks throughout the codebase.
+*/
+if (window.ArrayBuffer) {
+    // Memory implementation with typed arrays
+    Memory = function(bytes) {
+        this._buffer = new ArrayBuffer(bytes.length);
+        this._u8 = new Uint8Array(this._buffer);
+        this._u8.set(bytes);
+
+        this.length = this._buffer.byteLength;
+    };
+    // Array interface
+    Memory.prototype.slice = function(start, end) {
+        return new Memory(this._u8.subarray(start, end));
+    };
+    // Byte access
+    Memory.prototype.read1 = function(addr) {
+        return this._u8[addr];
+    };
+    Memory.prototype.read2 = function(addr) {
+        return (this._u8[addr] << 8) | (this._u8[addr+1]);
+    };
+    Memory.prototype.read4 = function(addr) {
+        return ((this._u8[addr] << 24) | (this._u8[addr+1] << 16)
+            | (this._u8[addr+2] << 8) | (this._u8[addr+3])) >>> 0;
+    };
+    Memory.prototype.write1 = function(addr, val) {
+        this._u8[addr] = val;
+    };
+    Memory.prototype.write2 = function(addr, val) {
+        this._u8[addr] = (val >> 8) & 0xFF;
+        this._u8[addr+1] = val & 0xFF;
+    };
+    Memory.prototype.write4 = function(addr, val) {
+        this._u8[addr]   = (val >>> 24) & 0xFF;
+        this._u8[addr+1] = (val >> 16) & 0xFF;
+        this._u8[addr+2] = (val >> 8) & 0xFF;
+        this._u8[addr+3] = val & 0xFF;
+    };
+}
+else {
+    // Memory implementation without typed arrays
+    Memory = function(bytes) {
+        this.buffer = bytes;
+
+        this.length = bytes.length;
+    };
+    // Array interface
+    Memory.prototype.slice = function(start, end) {
+        return new Memory(this.buffer.slice(start, end));
+    };
+    // Byte access
+    Memory.prototype.read1 = function(addr) {
+        return this.buffer[addr];
+    };
+    Memory.prototype.read2 = function(addr) {
+        return (this.buffer[addr] * 0x100) + (this.buffer[addr+1]);
+    };
+    Memory.prototype.read4 = function(addr) {
+        return (this.buffer[addr] * 0x1000000) + (this.buffer[addr+1] * 0x10000)
+            + (this.buffer[addr+2] * 0x100) + (this.buffer[addr+3]);
+    };
+    Memory.prototype.write1 = function(addr, val) {
+        // ignore high bytes if necessary
+        this.buffer[addr] = val & 0xFF;
+    };
+    Memory.prototype.write2 = function(addr, val) {
+        // ignore high bytes if necessary
+        this.buffer[addr] = (val >> 8) & 0xFF;
+        this.buffer[addr+1] = val & 0xFF;
+    };
+    Memory.prototype.write4 = function(addr, val) {
+        this.buffer[addr]   = (val >> 24) & 0xFF;
+        this.buffer[addr+1] = (val >> 16) & 0xFF;
+        this.buffer[addr+2] = (val >> 8) & 0xFF;
+        this.buffer[addr+3] = val & 0xFF;
+    };
+}
+
 /* This is called by the page (or the page's loader library) when it
    starts up. It must be called before quixe_init().
 
@@ -270,32 +352,6 @@ function ByteRead1(arr, addr) {
     return arr[addr];
 }
 
-function Mem1(addr) {
-    return memmap[addr];
-}
-function Mem2(addr) {
-    return (memmap[addr] * 0x100) + (memmap[addr+1]);
-}
-function Mem4(addr) {
-    return (memmap[addr] * 0x1000000) + (memmap[addr+1] * 0x10000)
-        + (memmap[addr+2] * 0x100) + (memmap[addr+3]);
-}
-function MemW1(addr, val) {
-    // ignore high bytes if necessary
-    memmap[addr] = val & 0xFF;
-}
-function MemW2(addr, val) {
-    // ignore high bytes if necessary
-    memmap[addr] = (val >> 8) & 0xFF;
-    memmap[addr+1] = val & 0xFF;
-}
-function MemW4(addr, val) {
-    memmap[addr]   = (val >> 24) & 0xFF;
-    memmap[addr+1] = (val >> 16) & 0xFF;
-    memmap[addr+2] = (val >> 8) & 0xFF;
-    memmap[addr+3] = val & 0xFF;
-}
-
 function BytePushString(arr, str) {
     for (var ix = 0; ix < str.length; ix++) {
         arr.push(str.charCodeAt(ix));
@@ -325,67 +381,74 @@ function ByteReadString(arr, addr, len) {
 }
 
 function QuoteMem1(addr) {
-    if (memmap[addr] >= 0x80)
-        return "0xffffff" + bytestring_table[memmap[addr]];
-    return "0x" + bytestring_table[memmap[addr]];
+    var val = memmap.read1(addr);
+    if (val >= 0x80)
+        return "0xffffff" + bytestring_table[val];
+    return "0x" + bytestring_table[val];
 }
 function QuoteMem2(addr) {
-    if (memmap[addr] >= 0x80)
-        return "0xffff" + bytestring_table[memmap[addr]] + bytestring_table[memmap[addr+1]];
-    if (memmap[addr])
-        return "0x" + bytestring_table[memmap[addr]] + bytestring_table[memmap[addr+1]];
-    return "0x" + bytestring_table[memmap[addr+1]];
+    var val0 = memmap.read1(addr);
+    var val1 = memmap.read1(addr + 1);
+    if (val0 >= 0x80)
+        return "0xffff" + bytestring_table[val0] + bytestring_table[val1];
+    if (val0)
+        return "0x" + bytestring_table[val0] + bytestring_table[val1];
+    return "0x" + bytestring_table[val1];
 }
 function QuoteMem4(addr) {
-    if (memmap[addr])
-        return "0x" + bytestring_table[memmap[addr]] + bytestring_table[memmap[addr+1]] + bytestring_table[memmap[addr+2]] + bytestring_table[memmap[addr+3]];
-    if (memmap[addr+1])
-        return "0x" + bytestring_table[memmap[addr+1]] + bytestring_table[memmap[addr+2]] + bytestring_table[memmap[addr+3]];
-    if (memmap[addr+2])
-        return "0x" + bytestring_table[memmap[addr+2]] + bytestring_table[memmap[addr+3]];
-    return "0x" + bytestring_table[memmap[addr+3]];
+    var val0 = memmap.read1(addr);
+    var val1 = memmap.read1(addr + 1);
+    var val2 = memmap.read1(addr + 2);
+    var val3 = memmap.read1(addr + 3);
+    if (val0)
+        return "0x" + bytestring_table[val0] + bytestring_table[val1] + bytestring_table[val2] + bytestring_table[val3];
+    if (val1)
+        return "0x" + bytestring_table[val1] + bytestring_table[val2] + bytestring_table[val3];
+    if (val2)
+        return "0x" + bytestring_table[val2] + bytestring_table[val3];
+    return "0x" + bytestring_table[val3];
 }
 
 function ReadArgByte(addr) {
     if (addr === 0xffffffff)
         return frame.valstack.pop() & 0xFF;
     else
-        return Mem1(addr);
+        return memmap.read1(addr);
 }
 
 function WriteArgByte(addr, val) {
     if (addr === 0xffffffff)
         frame.valstack.push(val & 0xFF);
     else
-        MemW1(addr, val);
+        memmap.write1(addr, val);
 }
 
 function ReadArgWord(addr) {
     if (addr === 0xffffffff)
         return frame.valstack.pop();
     else
-        return Mem4(addr);
+        return memmap.read4(addr);
 }
 
 function WriteArgWord(addr, val) {
     if (addr === 0xffffffff)
         frame.valstack.push(val);
     else
-        MemW4(addr, val);
+        memmap.write4(addr, val);
 }
 
 function ReadStructField(addr, fieldnum) {
     if (addr === 0xffffffff)
         return frame.valstack.pop();
     else
-        return Mem4(addr + 4*fieldnum);
+        return memmap.read4(addr + 4*fieldnum);
 }
 
 function WriteStructField(addr, fieldnum, val) {
     if (addr === 0xffffffff)
         frame.valstack.push(val);
     else
-        MemW4(addr + 4*fieldnum, val);
+        memmap.write4(addr + 4*fieldnum, val);
 }
 
 /* GiDispa calls this, right before resuming execution at the end of a
@@ -504,7 +567,7 @@ function VMFunc(funcaddr, startpc, localsformat, rawformat) {
     else {
         this.funcaddr = funcaddr;
         this.startpc = startpc;
-        this.functype = Mem1(funcaddr); /* 0xC0 or 0xC1 */
+        this.functype = memmap.read1(funcaddr); /* 0xC0 or 0xC1 */
     }
 
     /* Addresses of all known (or predicted) paths for this function. */
@@ -1042,13 +1105,13 @@ function oputil_store(context, funcop, operand) {
 
     case 15: /* The main-memory cases. */
         if (funcop.argsize === 4) {
-            context.code.push("MemW4("+funcop.addr+","+operand+");");
+            context.code.push("memmap.write4("+funcop.addr+","+operand+");");
         }
         else if (funcop.argsize === 2) {
-            context.code.push("MemW2("+funcop.addr+","+operand+");");
+            context.code.push("memmap.write2("+funcop.addr+","+operand+");");
         }
         else {
-            context.code.push("MemW1("+funcop.addr+","+operand+");");
+            context.code.push("memmap.write1("+funcop.addr+","+operand+");");
         }
         return;
 
@@ -1627,18 +1690,18 @@ var opcode_table = {
             if (quot_isconstant(operands[0])) {
                 /* Both operands constant */
                 addr = Number(operands[0]) + Number(operands[1]) * 4;
-                val = "Mem4("+(addr >>>0)+")";
+                val = "memmap.read4("+(addr >>>0)+")";
             }
             else {
                 var addr = Number(operands[1]) * 4;
                 if (addr)
-                    val = "Mem4(("+operands[0]+"+"+addr+") >>>0)";
+                    val = "memmap.read4(("+operands[0]+"+"+addr+") >>>0)";
                 else
-                    val = "Mem4("+operands[0]+")";
+                    val = "memmap.read4("+operands[0]+")";
             }
         }
         else {
-            val = "Mem4(("+operands[0]+"+4*"+operands[1]+") >>>0)";
+            val = "memmap.read4(("+operands[0]+"+4*"+operands[1]+") >>>0)";
         }
         context.code.push(operands[2]+val+");");
     },
@@ -1649,18 +1712,18 @@ var opcode_table = {
             if (quot_isconstant(operands[0])) {
                 /* Both operands constant */
                 addr = Number(operands[0]) + Number(operands[1]) * 2;
-                val = "Mem2("+(addr >>>0)+")";
+                val = "memmap.read2("+(addr >>>0)+")";
             }
             else {
                 var addr = Number(operands[1]) * 2;
                 if (addr)
-                    val = "Mem2(("+operands[0]+"+"+addr+") >>>0)";
+                    val = "memmap.read2(("+operands[0]+"+"+addr+") >>>0)";
                 else
-                    val = "Mem2("+operands[0]+")";
+                    val = "memmap.read2("+operands[0]+")";
             }
         }
         else {
-            val = "Mem2(("+operands[0]+"+2*"+operands[1]+") >>>0)";
+            val = "memmap.read2(("+operands[0]+"+2*"+operands[1]+") >>>0)";
         }
         context.code.push(operands[2]+val+");");
     },
@@ -1671,18 +1734,18 @@ var opcode_table = {
             if (quot_isconstant(operands[0])) {
                 /* Both operands constant */
                 addr = Number(operands[0]) + Number(operands[1]);
-                val = "Mem1("+(addr >>>0)+")";
+                val = "memmap.read1("+(addr >>>0)+")";
             }
             else {
                 var addr = Number(operands[1]);
                 if (addr)
-                    val = "Mem1(("+operands[0]+"+"+addr+") >>>0)";
+                    val = "memmap.read1(("+operands[0]+"+"+addr+") >>>0)";
                 else
-                    val = "Mem1("+operands[0]+")";
+                    val = "memmap.read1("+operands[0]+")";
             }
         }
         else {
-            val = "Mem1(("+operands[0]+"+"+operands[1]+") >>>0)";
+            val = "memmap.read1(("+operands[0]+"+"+operands[1]+") >>>0)";
         }
         context.code.push(operands[2]+val+");");
     },
@@ -1706,7 +1769,7 @@ var opcode_table = {
         else {
             val = "("+operands[0]+"+4*"+operands[1]+") >>>0"+",";
         }
-        context.code.push("MemW4("+val+operands[2]+")"+";");
+        context.code.push("memmap.write4("+val+operands[2]+")"+";");
     },
 
     0x4d: function(context, operands) { /* astores */
@@ -1728,7 +1791,7 @@ var opcode_table = {
         else {
             val = "("+operands[0]+"+2*"+operands[1]+") >>>0"+",";
         }
-        context.code.push("MemW2("+val+operands[2]+")"+";");
+        context.code.push("memmap.write2("+val+operands[2]+")"+";");
     },
 
     0x4e: function(context, operands) { /* astoreb */
@@ -1750,7 +1813,7 @@ var opcode_table = {
         else {
             val = "("+operands[0]+"+"+operands[1]+") >>>0"+",";
         }
-        context.code.push("MemW1("+val+operands[2]+")"+";");
+        context.code.push("memmap.write1("+val+operands[2]+")"+";");
     },
 
     0x4b: function(context, operands) { /* aloadbit */
@@ -1778,7 +1841,7 @@ var opcode_table = {
                     addrx = (operands[0]+"-"+(1+((-1-bitnum)>>3)));
                 }
             }
-            context.code.push(operands[2]+"(Mem1("+addrx+") & "+(1<<bitx)+")?1:0);");
+            context.code.push(operands[2]+"(memmap.read1("+addrx+") & "+(1<<bitx)+")?1:0);");
         }
         else {
             context.varsused["bitx"] = true;
@@ -1787,7 +1850,7 @@ var opcode_table = {
             context.code.push("bitx = "+sign1+"&7;");
             context.code.push("if ("+sign1+">=0) addrx = "+operands[0]+" + ("+sign1+">>3);");
             context.code.push("else addrx = "+operands[0]+" - (1+((-1-("+sign1+"))>>3));");
-            context.code.push(operands[2]+"(Mem1(addrx) & (1<<bitx))?1:0);");
+            context.code.push(operands[2]+"(memmap.read1(addrx) & (1<<bitx))?1:0);");
         }
     },
 
@@ -1830,13 +1893,13 @@ var opcode_table = {
         }
         if (quot_isconstant(operands[2])) {
             if (Number(operands[2]))
-                context.code.push("MemW1("+addrx+", Mem1("+addrx+") | "+mask+");");
+                context.code.push("memmap.write1("+addrx+", memmap.read1("+addrx+") | "+mask+");");
             else
-                context.code.push("MemW1("+addrx+", Mem1("+addrx+") & ~("+mask+"));");
+                context.code.push("memmap.write1("+addrx+", memmap.read1("+addrx+") & ~("+mask+"));");
         }
         else {
-            context.code.push("if ("+operands[2]+") MemW1("+addrx+", Mem1("+addrx+") | "+mask+");");
-            context.code.push("else MemW1("+addrx+", Mem1("+addrx+") & ~("+mask+"));");
+            context.code.push("if ("+operands[2]+") memmap.write1("+addrx+", memmap.read1("+addrx+") | "+mask+");");
+            context.code.push("else memmap.write1("+addrx+", memmap.read1("+addrx+") & ~("+mask+"));");
         }
     },
 
@@ -2066,7 +2129,7 @@ var opcode_table = {
         context.varsused["ix"] = true;
         context.code.push("mlen="+operands[0]+";");
         context.code.push("maddr="+operands[1]+";");
-        context.code.push("for (ix=0; ix<mlen; ix++, maddr++) MemW1(maddr, 0);");
+        context.code.push("for (ix=0; ix<mlen; ix++, maddr++) memmap.write1(maddr, 0);");
     },
 
     0x171: function(context, operands) { /* mcopy */
@@ -2082,10 +2145,10 @@ var opcode_table = {
            But for a rarely-used opcode, it's not really worth it.
         */
         context.code.push("if (mdest < msrc) {");
-        context.code.push("for (ix=0; ix<mlen; ix++, msrc++, mdest++) MemW1(mdest, Mem1(msrc));");
+        context.code.push("for (ix=0; ix<mlen; ix++, msrc++, mdest++) memmap.write1(mdest, memmap.read1(msrc));");
         context.code.push("} else {");
         context.code.push("msrc += (mlen-1); mdest += (mlen-1);");
-        context.code.push("for (ix=0; ix<mlen; ix++, msrc--, mdest--) MemW1(mdest, Mem1(msrc));");
+        context.code.push("for (ix=0; ix<mlen; ix++, msrc--, mdest--) memmap.write1(mdest, memmap.read1(msrc));");
         context.code.push("}");
     },
 
@@ -2742,7 +2805,7 @@ function parse_operands(context, cp, oplist, operands) {
 
     for (ix=0; ix<oplist.numops; ix++) {
         if ((ix & 1) === 0) {
-            modeval = Mem1(modeaddr);
+            modeval = memmap.read1(modeaddr);
             mode = (modeval & 0x0F);
         }
         else {
@@ -2795,15 +2858,15 @@ function parse_operands(context, cp, oplist, operands) {
 
             if (mode >= 9 && mode <= 11) {
                 if (mode === 9) {
-                    addr = Mem1(cp);
+                    addr = memmap.read1(cp);
                     cp++;
                 }
                 else if (mode === 10) {
-                    addr = Mem2(cp);
+                    addr = memmap.read2(cp);
                     cp += 2;
                 }
                 else if (mode === 11) {
-                    addr = Mem4(cp);
+                    addr = memmap.read4(cp);
                     cp += 4;
                 }
 
@@ -2831,32 +2894,32 @@ function parse_operands(context, cp, oplist, operands) {
 
             switch (mode) {
             case 15: /* main memory RAM, four-byte address */
-                addr = Mem4(cp) + ramstart;
+                addr = memmap.read4(cp) + ramstart;
                 cp += 4;
                 break;
 
             case 14: /* main memory RAM, two-byte address */
-                addr = Mem2(cp) + ramstart;
+                addr = memmap.read2(cp) + ramstart;
                 cp += 2;
                 break;
 
             case 13: /* main memory RAM, one-byte address */
-                addr = Mem1(cp) + ramstart;
+                addr = memmap.read1(cp) + ramstart;
                 cp++;
                 break;
 
             case 7: /* main memory, four-byte address */
-                addr = Mem4(cp);
+                addr = memmap.read4(cp);
                 cp += 4;
                 break;
 
             case 6: /* main memory, two-byte address */
-                addr = Mem2(cp);
+                addr = memmap.read2(cp);
                 cp += 2;
                 break;
 
             case 5: /* main memory, one-byte address */
-                addr = Mem1(cp);
+                addr = memmap.read1(cp);
                 cp++;
                 break;
 
@@ -2866,13 +2929,13 @@ function parse_operands(context, cp, oplist, operands) {
 
             /* The main-memory cases. */
             if (oplist.argsize === 4) {
-                value = "Mem4("+addr+")";
+                value = "memmap.read4("+addr+")";
             }
             else if (oplist.argsize === 2) {
-                value = "Mem2("+addr+")";
+                value = "memmap.read2("+addr+")";
             }
             else {
-                value = "Mem1("+addr+")";
+                value = "memmap.read1("+addr+")";
             }
             holdvar = alloc_holdvar(context);
             context.code.push(holdvar+"=("+value+");");
@@ -2921,15 +2984,15 @@ function parse_operands(context, cp, oplist, operands) {
 
             if (mode >= 9 && mode <= 11) {
                 if (mode === 9) {
-                    addr = Mem1(cp);
+                    addr = memmap.read1(cp);
                     cp++;
                 }
                 else if (mode === 10) {
-                    addr = Mem2(cp);
+                    addr = memmap.read2(cp);
                     cp += 2;
                 }
                 else if (mode === 11) {
-                    addr = Mem4(cp);
+                    addr = memmap.read4(cp);
                     cp += 4;
                 }
 
@@ -2957,32 +3020,32 @@ function parse_operands(context, cp, oplist, operands) {
 
             switch (mode) {
             case 15: /* main memory RAM, four-byte address */
-                addr = Mem4(cp) + ramstart;
+                addr = memmap.read4(cp) + ramstart;
                 cp += 4;
                 break;
 
             case 14: /* main memory RAM, two-byte address */
-                addr = Mem2(cp) + ramstart;
+                addr = memmap.read2(cp) + ramstart;
                 cp += 2;
                 break;
 
             case 13: /* main memory RAM, one-byte address */
-                addr = Mem1(cp) + ramstart;
+                addr = memmap.read1(cp) + ramstart;
                 cp++;
                 break;
 
             case 7: /* main memory, four-byte address */
-                addr = Mem4(cp);
+                addr = memmap.read4(cp);
                 cp += 4;
                 break;
 
             case 6: /* main memory, two-byte address */
-                addr = Mem2(cp);
+                addr = memmap.read2(cp);
                 cp += 2;
                 break;
 
             case 5: /* main memory, one-byte address */
-                addr = Mem1(cp);
+                addr = memmap.read1(cp);
                 cp++;
                 break;
 
@@ -2992,13 +3055,13 @@ function parse_operands(context, cp, oplist, operands) {
 
             /* The main-memory cases. */
             if (oplist.argsize === 4) {
-                value = "Mem4("+addr+")";
+                value = "memmap.read4("+addr+")";
             }
             else if (oplist.argsize === 2) {
-                value = "Mem2("+addr+")";
+                value = "memmap.read2("+addr+")";
             }
             else {
-                value = "Mem1("+addr+")";
+                value = "memmap.read1("+addr+")";
             }
             operands[ix] = value;
             continue;
@@ -3021,15 +3084,15 @@ function parse_operands(context, cp, oplist, operands) {
 
             if (mode >= 9 && mode <= 11) {
                 if (mode === 9) {
-                    addr = Mem1(cp);
+                    addr = memmap.read1(cp);
                     cp++;
                 }
                 else if (mode === 10) {
-                    addr = Mem2(cp);
+                    addr = memmap.read2(cp);
                     cp += 2;
                 }
                 else if (mode === 11) {
-                    addr = Mem4(cp);
+                    addr = memmap.read4(cp);
                     cp += 4;
                 }
 
@@ -3052,32 +3115,32 @@ function parse_operands(context, cp, oplist, operands) {
 
             switch (mode) {
             case 15: /* main memory RAM, four-byte address */
-                addr = Mem4(cp) + ramstart;
+                addr = memmap.read4(cp) + ramstart;
                 cp += 4;
                 break;
 
             case 14: /* main memory RAM, two-byte address */
-                addr = Mem2(cp) + ramstart;
+                addr = memmap.read2(cp) + ramstart;
                 cp += 2;
                 break;
 
             case 13: /* main memory RAM, one-byte address */
-                addr = Mem1(cp) + ramstart;
+                addr = memmap.read1(cp) + ramstart;
                 cp++;
                 break;
 
             case 7: /* main memory, four-byte address */
-                addr = Mem4(cp);
+                addr = memmap.read4(cp);
                 cp += 4;
                 break;
 
             case 6: /* main memory, two-byte address */
-                addr = Mem2(cp);
+                addr = memmap.read2(cp);
                 cp += 2;
                 break;
 
             case 5: /* main memory, one-byte address */
-                addr = Mem1(cp);
+                addr = memmap.read1(cp);
                 cp++;
                 break;
 
@@ -3087,13 +3150,13 @@ function parse_operands(context, cp, oplist, operands) {
 
             /* The main-memory cases. */
             if (oplist.argsize === 4) {
-                value = "MemW4("+addr+",";
+                value = "memmap.write4("+addr+",";
             }
             else if (oplist.argsize === 2) {
-                value = "MemW2("+addr+",";
+                value = "memmap.write2("+addr+",";
             }
             else {
-                value = "MemW1("+addr+",";
+                value = "memmap.write1("+addr+",";
             }
             operands[ix] = value;
             continue;
@@ -3118,15 +3181,15 @@ function parse_operands(context, cp, oplist, operands) {
 
             if (mode >= 9 && mode <= 11) {
                 if (mode === 9) {
-                    addr = Mem1(cp);
+                    addr = memmap.read1(cp);
                     cp++;
                 }
                 else if (mode === 10) {
-                    addr = Mem2(cp);
+                    addr = memmap.read2(cp);
                     cp += 2;
                 }
                 else if (mode === 11) {
-                    addr = Mem4(cp);
+                    addr = memmap.read4(cp);
                     cp += 4;
                 }
 
@@ -3140,32 +3203,32 @@ function parse_operands(context, cp, oplist, operands) {
 
             switch (mode) {
             case 15: /* main memory RAM, four-byte address */
-                addr = Mem4(cp) + ramstart;
+                addr = memmap.read4(cp) + ramstart;
                 cp += 4;
                 break;
 
             case 14: /* main memory RAM, two-byte address */
-                addr = Mem2(cp) + ramstart;
+                addr = memmap.read2(cp) + ramstart;
                 cp += 2;
                 break;
 
             case 13: /* main memory RAM, one-byte address */
-                addr = Mem1(cp) + ramstart;
+                addr = memmap.read1(cp) + ramstart;
                 cp++;
                 break;
 
             case 7: /* main memory, four-byte address */
-                addr = Mem4(cp);
+                addr = memmap.read4(cp);
                 cp += 4;
                 break;
 
             case 6: /* main memory, two-byte address */
-                addr = Mem2(cp);
+                addr = memmap.read2(cp);
                 cp += 2;
                 break;
 
             case 5: /* main memory, one-byte address */
-                addr = Mem1(cp);
+                addr = memmap.read1(cp);
                 cp++;
                 break;
 
@@ -3194,15 +3257,15 @@ function parse_operands(context, cp, oplist, operands) {
 
             if (mode >= 9 && mode <= 11) {
                 if (mode === 9) {
-                    addr = Mem1(cp);
+                    addr = memmap.read1(cp);
                     cp++;
                 }
                 else if (mode === 10) {
-                    addr = Mem2(cp);
+                    addr = memmap.read2(cp);
                     cp += 2;
                 }
                 else if (mode === 11) {
-                    addr = Mem4(cp);
+                    addr = memmap.read4(cp);
                     cp += 4;
                 }
 
@@ -3213,32 +3276,32 @@ function parse_operands(context, cp, oplist, operands) {
 
             switch (mode) {
             case 15: /* main memory RAM, four-byte address */
-                addr = Mem4(cp) + ramstart;
+                addr = memmap.read4(cp) + ramstart;
                 cp += 4;
                 break;
 
             case 14: /* main memory RAM, two-byte address */
-                addr = Mem2(cp) + ramstart;
+                addr = memmap.read2(cp) + ramstart;
                 cp += 2;
                 break;
 
             case 13: /* main memory RAM, one-byte address */
-                addr = Mem1(cp) + ramstart;
+                addr = memmap.read1(cp) + ramstart;
                 cp++;
                 break;
 
             case 7: /* main memory, four-byte address */
-                addr = Mem4(cp);
+                addr = memmap.read4(cp);
                 cp += 4;
                 break;
 
             case 6: /* main memory, two-byte address */
-                addr = Mem2(cp);
+                addr = memmap.read2(cp);
                 cp += 2;
                 break;
 
             case 5: /* main memory, one-byte address */
-                addr = Mem1(cp);
+                addr = memmap.read1(cp);
                 cp++;
                 break;
 
@@ -3264,7 +3327,7 @@ function compile_func(funcaddr) {
     var addr = funcaddr;
 
     /* Check the Glulx type identifier byte. */
-    var functype = Mem1(addr);
+    var functype = memmap.read1(addr);
     if (functype !== 0xC0 && functype !== 0xC1) {
         if (functype >= 0xC0 && functype <= 0xDF)
             fatal_error("Call to unknown type of function.", addr);
@@ -3281,9 +3344,9 @@ function compile_func(funcaddr) {
     while (1) {
         /* Grab two bytes from the locals-format list. These are
            unsigned (0..255 range). */
-        var loctype = Mem1(addr);
+        var loctype = memmap.read1(addr);
         addr++;
-        var locnum = Mem1(addr);
+        var locnum = memmap.read1(addr);
         addr++;
 
         if (loctype === 0) {
@@ -3299,9 +3362,9 @@ function compile_func(funcaddr) {
     /* We also copy the raw format list. This will be handy later on,
        when we need to serialize the stack. Note that it might be
        padded with extra zeroes to a four-byte boundary. */
-    var rawformat = memmap.slice(rawstart, addr);
-    while (rawformat.length % 4)
-        rawformat.push(0);
+    var rawsize = addr - rawstart;
+    var rawpadding = 4 - (rawsize % 4 || 4);
+    var rawformat = memmap.slice(rawstart, addr + rawpadding);
 
     return new VMFunc(funcaddr, addr, localsformat, rawformat);
 }
@@ -3381,7 +3444,7 @@ function compile_path(vmfunc, startaddr, startiosys) {
 
         /* Fetch the opcode number. */
         opcodecp = cp;
-        opcode = Mem1(cp);
+        opcode = memmap.read1(cp);
         if (opcode === undefined)
             fatal_error("Tried to compile nonexistent address", cp);
         cp++;
@@ -3391,17 +3454,17 @@ function compile_path(vmfunc, startaddr, startiosys) {
             if (opcode & 0x40) {
                 /* Four-byte opcode */
                 opcode &= 0x3F;
-                opcode = (opcode * 0x100) | Mem1(cp);
+                opcode = (opcode * 0x100) | memmap.read1(cp);
                 cp++;
-                opcode = (opcode * 0x100) | Mem1(cp);
+                opcode = (opcode * 0x100) | memmap.read1(cp);
                 cp++;
-                opcode = (opcode * 0x100) | Mem1(cp);
+                opcode = (opcode * 0x100) | memmap.read1(cp);
                 cp++;
             }
             else {
                 /* Two-byte opcode */
                 opcode &= 0x7F;
-                opcode = (opcode * 0x100) | Mem1(cp);
+                opcode = (opcode * 0x100) | memmap.read1(cp);
                 cp++;
             }
         }
@@ -3602,7 +3665,7 @@ function pop_callstub(val) {
     case 0:
         return;
     case 1:
-        MemW4(destaddr, val);
+        memmap.write4(destaddr, val);
         return;
     case 2:
         frame.locals[destaddr] = val;
@@ -3652,7 +3715,7 @@ function store_operand(desttype, destaddr, val) {
     case 0:
         return;
     case 1:
-        MemW4(destaddr, val);
+        memmap.write4(destaddr, val);
         return;
     case 2:
         frame.locals[destaddr] = val;
@@ -3695,13 +3758,13 @@ function store_operand_by_funcop(funcop, val) {
 
     case 15: /* The main-memory cases. */
         if (funcop.argsize === 4) {
-            MemW4(funcop.addr, val);
+            memmap.write4(funcop.addr, val);
         }
         else if (funcop.argsize === 2) {
-            MemW2(funcop.addr, val);
+            memmap.write2(funcop.addr, val);
         }
         else {
-            MemW1(funcop.addr, val);
+            memmap.write1(funcop.addr, val);
         }
         return;
 
@@ -3786,7 +3849,7 @@ var accel_func_map = {
         if (addr >= endmem)
             return 0;
 
-        var tb = Mem1(addr);
+        var tb = memmap.read1(addr);
         if (tb >= 0xE0) {
             return 3;
         }
@@ -3809,11 +3872,11 @@ var accel_func_map = {
             return 0;
         }
 
-        var otab = Mem4(obj + 16);
+        var otab = memmap.read4(obj + 16);
         if (!otab)
             return 0;
 
-        var max = Mem4(otab);
+        var max = memmap.read4(otab);
         otab += 4;
         /* @binarysearch id 2 otab 10 max 0 0 res; */
         return binary_search(id, 2, otab, 10, max, 0, 0);
@@ -3827,7 +3890,7 @@ var accel_func_map = {
         if (prop === 0)
             return 0;
 
-        return Mem4(prop + 4);
+        return memmap.read4(prop + 4);
     },
 
     4: function func_4_rl__pr(argc, argv) {
@@ -3838,7 +3901,7 @@ var accel_func_map = {
         if (prop === 0)
             return 0;
 
-        return 4 * Mem2(prop + 2);
+        return 4 * memmap.read2(prop + 2);
     },
 
     5: function func_5_oc__cl(argc, argv) {
@@ -3894,13 +3957,13 @@ var accel_func_map = {
         if (prop === 0)
            return 0;
 
-        inlist = Mem4(prop + 4);
+        inlist = memmap.read4(prop + 4);
         if (inlist === 0)
            return 0;
 
-        inlistlen = Mem2(prop + 2);
+        inlistlen = memmap.read2(prop + 2);
         for (jx = 0; jx < inlistlen; jx++) {
-            if (Mem4(inlist + (4 * jx)) === cla)
+            if (memmap.read4(inlist + (4 * jx)) === cla)
                 return 1;
         }
         return 0;
@@ -3916,15 +3979,15 @@ var accel_func_map = {
         if (addr === 0) {
             /* id > 0 && id < indiv_prop_start */
             if ((id > 0) && (id < accel_params[1])) {
-                /* Mem4(cpv__start + 4*id) */
-                return Mem4(accel_params[8] + (4 * id));
+                /* memmap.read4(cpv__start + 4*id) */
+                return memmap.read4(accel_params[8] + (4 * id));
             }
 
             Glk.glk_put_jstring("\n[** Programming error: tried to read (something) **]\n");
             return 0;
         }
 
-        return Mem4(addr);
+        return memmap.read4(addr);
     },
 
     7: function func_7_op__pr(argc, argv) {
@@ -3970,12 +4033,12 @@ var accel_func_map = {
             return 0;
         }
 
-        /*  otab = Mem4(obj + 4*(3+(int)(num_attr_bytes/4))); */
-        var otab = Mem4(obj + 4*(3+(accel_params[7]>>2)));
+        /*  otab = memmap.read4(obj + 4*(3+(int)(num_attr_bytes/4))); */
+        var otab = memmap.read4(obj + 4*(3+(accel_params[7]>>2)));
         if (!otab)
             return 0;
 
-        var max = Mem4(otab);
+        var max = memmap.read4(otab);
         otab += 4;
         /* @binarysearch id 2 otab 10 max 0 0 res; */
         return binary_search(id, 2, otab, 10, max, 0, 0);
@@ -3989,7 +4052,7 @@ var accel_func_map = {
         if (prop === 0)
             return 0;
 
-        return Mem4(prop + 4);
+        return memmap.read4(prop + 4);
     },
 
     10: function func_10_rl__pr(argc, argv) {
@@ -4000,7 +4063,7 @@ var accel_func_map = {
         if (prop === 0)
             return 0;
 
-        return 4 * Mem2(prop + 2);
+        return 4 * memmap.read2(prop + 2);
     },
 
     11: function func_11_oc__cl(argc, argv) {
@@ -4056,13 +4119,13 @@ var accel_func_map = {
         if (prop === 0)
            return 0;
 
-        inlist = Mem4(prop + 4);
+        inlist = memmap.read4(prop + 4);
         if (inlist === 0)
            return 0;
 
-        inlistlen = Mem2(prop + 2);
+        inlistlen = memmap.read2(prop + 2);
         for (jx = 0; jx < inlistlen; jx++) {
-            if (Mem4(inlist + (4 * jx)) === cla)
+            if (memmap.read4(inlist + (4 * jx)) === cla)
                 return 1;
         }
         return 0;
@@ -4078,15 +4141,15 @@ var accel_func_map = {
         if (addr === 0) {
             /* id > 0 && id < indiv_prop_start */
             if ((id > 0) && (id < accel_params[1])) {
-                /* Mem4(cpv__start + 4*id) */
-                return Mem4(accel_params[8] + (4 * id));
+                /* memmap.read4(cpv__start + 4*id) */
+                return memmap.read4(accel_params[8] + (4 * id));
             }
 
             Glk.glk_put_jstring("\n[** Programming error: tried to read (something) **]\n");
             return 0;
         }
 
-        return Mem4(addr);
+        return memmap.read4(addr);
     },
 
     13: function func_13_op__pr(argc, argv) {
@@ -4129,8 +4192,8 @@ function accel_helper_obj_in_class(obj)
 {
     /* This checks whether obj is contained in Class, not whether
        it is a member of Class. */
-    /* (Mem4(obj + 13 + num_attr_bytes) === class_metaclass) */
-    return (Mem4(obj + 13 + accel_params[7]) === accel_params[2]);
+    /* (memmap.read4(obj + 13 + num_attr_bytes) === class_metaclass) */
+    return (memmap.read4(obj + 13 + accel_params[7]) === accel_params[2]);
 }
 
 /* Look up a property entry. */
@@ -4140,8 +4203,8 @@ function accel_helper_get_prop(obj, id)
     var prop;
 
     if (id & 0xFFFF0000) {
-        /* Mem4(classes_table+...) */
-        cla = Mem4(accel_params[0]+((id & 0xFFFF) * 4));
+        /* memmap.read4(classes_table+...) */
+        cla = memmap.read4(accel_params[0]+((id & 0xFFFF) * 4));
         accel_helper_temp_args[0] = obj;
         accel_helper_temp_args[1] = cla;
         /* func_5_oc__cl */
@@ -4165,9 +4228,9 @@ function accel_helper_get_prop(obj, id)
             return 0;
     }
 
-    /* Mem4(self) -- the global variable self */
-    if (Mem4(accel_params[6]) !== obj) {
-        if (Mem1(prop + 9) & 1)
+    /* memmap.read4(self) -- the global variable self */
+    if (memmap.read4(accel_params[6]) !== obj) {
+        if (memmap.read1(prop + 9) & 1)
             return 0;
     }
     return prop;
@@ -4183,8 +4246,8 @@ function accel_helper_get_prop_new(obj, id)
     var prop;
 
     if (id & 0xFFFF0000) {
-        /* Mem4(classes_table+...) */
-        cla = Mem4(accel_params[0]+((id & 0xFFFF) * 4));
+        /* memmap.read4(classes_table+...) */
+        cla = memmap.read4(accel_params[0]+((id & 0xFFFF) * 4));
         accel_helper_temp_args[0] = obj;
         accel_helper_temp_args[1] = cla;
         /* func_11_oc__cl */
@@ -4208,9 +4271,9 @@ function accel_helper_get_prop_new(obj, id)
             return 0;
     }
 
-    /* Mem4(self) -- the global variable self */
-    if (Mem4(accel_params[6]) !== obj) {
-        if (Mem1(prop + 9) & 1)
+    /* memmap.read4(self) -- the global variable self */
+    if (memmap.read4(accel_params[6]) !== obj) {
+        if (memmap.read1(prop + 9) & 1)
             return 0;
     }
     return prop;
@@ -4239,8 +4302,8 @@ function set_string_table(addr) {
         /* If the table is entirely in ROM, we can build a decoding tree.
            If not, leave it undefined in the VMTextEnv. */
         var dectab = undefined;
-        var tablelen = Mem4(stringtable);
-        var rootaddr = Mem4(stringtable+8);
+        var tablelen = memmap.read4(stringtable);
+        var rootaddr = memmap.read4(stringtable+8);
         var cache_stringtable = (stringtable+tablelen <= ramstart);
         if (cache_stringtable) {
             //qlog("building decoding table at " + stringtable.toString(16) + ", length " + tablelen.toString(16));
@@ -4311,7 +4374,7 @@ function build_decoding_tree(cablist, nodeaddr, depth, mask) {
     var ix, type, cab;
     var depthbit;
 
-    type = Mem1(nodeaddr);
+    type = memmap.read1(nodeaddr);
 
     if (type === 0 && depth === 4) { /*CACHEBITS*/
         /* Start a new array. */
@@ -4324,8 +4387,8 @@ function build_decoding_tree(cablist, nodeaddr, depth, mask) {
     }
 
     if (type === 0) {
-        var leftaddr  = Mem4(nodeaddr+1);
-        var rightaddr = Mem4(nodeaddr+5);
+        var leftaddr  = memmap.read4(nodeaddr+1);
+        var rightaddr = memmap.read4(nodeaddr+5);
         build_decoding_tree(cablist, leftaddr, depth+1, mask);
         build_decoding_tree(cablist, rightaddr, depth+1, (mask | (1 << depth)));
         return;
@@ -4339,11 +4402,11 @@ function build_decoding_tree(cablist, nodeaddr, depth, mask) {
     cab.depth = depth;
     switch (type) {
     case 0x02: /* 8-bit character */
-        cab.value = Mem1(nodeaddr);
+        cab.value = memmap.read1(nodeaddr);
         cab.cchar = CharToString(cab.value);
         break;
     case 0x04: /* Unicode character */
-        cab.value = Mem4(nodeaddr);
+        cab.value = memmap.read4(nodeaddr);
         cab.cchar = CharToString(cab.value);
         break;
     case 0x03: /* C-style string */
@@ -4354,7 +4417,7 @@ function build_decoding_tree(cablist, nodeaddr, depth, mask) {
         break;
     case 0x08: /* indirect ref */
     case 0x09: /* double-indirect ref */
-        cab.addr = Mem4(nodeaddr);
+        cab.addr = memmap.read4(nodeaddr);
         break;
     case 0x0A: /* indirect ref with arguments */
     case 0x0B: /* double-indirect ref with arguments */
@@ -4547,10 +4610,10 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
         startbitnum: startbitnum,
         buffer: [],
         code: []
-    }
+    };
 
     if (inmiddle === 0) {
-        type = Mem1(addr);
+        type = memmap.read1(addr);
         if (type === 0xE2)
             addr+=4;
         else
@@ -4568,7 +4631,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
             var done = false;
 
             /* bitnum is already set right */
-            bits = Mem1(addr);
+            bits = memmap.read1(addr);
             if (bitnum)
                 bits >>= bitnum;
             numbits = (8 - bitnum);
@@ -4586,7 +4649,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
             while (!done) {
                 if (numbits < 4) { /* CACHEBITS */
                     /* readahead is certainly false */
-                    var newbyte = Mem1(addr+1);
+                    var newbyte = memmap.read1(addr+1);
                     bits |= (newbyte << numbits);
                     numbits += 8;
                     readahead = true;
@@ -4603,7 +4666,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         readahead = false;
                     }
                     else {
-                        var newbyte = Mem1(addr);
+                        var newbyte = memmap.read1(addr);
                         bits |= (newbyte << numbits);
                         numbits += 8;
                     }
@@ -4642,7 +4705,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     case 2: /* glk */
                         tmpaddr = cab.addr;
                         while (true) {
-                            ch = Mem1(tmpaddr);
+                            ch = memmap.read1(tmpaddr);
                             if (ch === 0)
                                 break;
                             context.buffer.push(CharToString(ch));
@@ -4664,7 +4727,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     case 2: /* glk */
                         tmpaddr = cab.addr;
                         while (true) {
-                            ch = Mem4(tmpaddr);
+                            ch = memmap.read4(tmpaddr);
                             if (ch === 0)
                                 break;
                             context.buffer.push(CharToString(ch));
@@ -4695,10 +4758,10 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     context.code.push("var otype, retval;");
                     context.code.push("var oaddr = "+(cab.addr)+";");
                     if (cab.type >= 0x09)
-                        context.code.push("oaddr = Mem4(oaddr);");
+                        context.code.push("oaddr = memmap.read4(oaddr);");
                     if (cab.type === 0x0B)
-                        context.code.push("oaddr = Mem4(oaddr);");
-                    context.code.push("otype = Mem1(oaddr);");
+                        context.code.push("oaddr = memmap.read4(oaddr);");
+                    context.code.push("otype = memmap.read1(oaddr);");
                     retval = "retval";
                     done = true;
 
@@ -4709,9 +4772,9 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     context.code.push("else if (otype >= 0xC0 && otype <= 0xDF) {");
                     var argc = 0;
                     if (cab.type === 0x0A || cab.type === 0x0B) {
-                        argc = Mem4(cab.addr+4);
+                        argc = memmap.read4(cab.addr+4);
                         for (var ix=0; ix<argc; ix++)
-                            context.code.push("tempcallargs["+ix+"]="+Mem4(cab.addr+8+4*ix)+";");
+                            context.code.push("tempcallargs["+ix+"]="+memmap.read4(cab.addr+8+4*ix)+";");
                     }
                     context.code.push("enter_function(oaddr, "+argc+");");
                     context.code.push("retval = true;");
@@ -4733,24 +4796,24 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
             if (!stringtable)
                 fatal_error("Attempted to print a compressed string with no table set.");
             /* bitnum is already set right */
-            byt = Mem1(addr);
+            byt = memmap.read1(addr);
             if (bitnum)
                 byt >>= bitnum;
-            node = Mem4(stringtable+8);
+            node = memmap.read4(stringtable+8);
 
             while (!done) {
-                nodetype = Mem1(node);
+                nodetype = memmap.read1(node);
                 node++;
                 switch (nodetype) {
                 case 0x00: /* non-leaf node */
                     if (byt & 1)
-                        node = Mem4(node+4);
+                        node = memmap.read4(node+4);
                     else
-                        node = Mem4(node+0);
+                        node = memmap.read4(node+0);
                     if (bitnum === 7) {
                         bitnum = 0;
                         addr++;
-                        byt = Mem1(addr);
+                        byt = memmap.read1(addr);
                     }
                     else {
                         bitnum++;
@@ -4762,7 +4825,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     done = true;
                     break;
                 case 0x02: /* single character */
-                    ch = Mem1(node);
+                    ch = memmap.read1(node);
                     switch (curiosys) {
                     case 2: /* glk */
                         context.buffer.push(CharToString(ch));
@@ -4777,10 +4840,10 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         done = true;
                         break;
                     }
-                    node = Mem4(stringtable+8);
+                    node = memmap.read4(stringtable+8);
                     break;
                 case 0x04: /* single Unicode character */
-                    ch = Mem4(node);
+                    ch = memmap.read4(node);
                     switch (curiosys) {
                     case 2: /* glk */
                         context.buffer.push(CharToString(ch));
@@ -4795,13 +4858,13 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         done = true;
                         break;
                     }
-                    node = Mem4(stringtable+8);
+                    node = memmap.read4(stringtable+8);
                     break;
                 case 0x03: /* C string */
                     switch (curiosys) {
                     case 2: /* glk */
                         while (true) {
-                            ch = Mem1(node);
+                            ch = memmap.read1(node);
                             if (ch === 0)
                                 break;
                             context.buffer.push(CharToString(ch));
@@ -4816,13 +4879,13 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         done = true;
                         break;
                     }
-                    node = Mem4(stringtable+8);
+                    node = memmap.read4(stringtable+8);
                     break;
                 case 0x05: /* C Unicode string */
                     switch (curiosys) {
                     case 2: /* glk */
                         while (true) {
-                            ch = Mem4(node);
+                            ch = memmap.read4(node);
                             if (ch === 0)
                                 break;
                             context.buffer.push(CharToString(ch));
@@ -4837,7 +4900,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         done = true;
                         break;
                     }
-                    node = Mem4(stringtable+8);
+                    node = memmap.read4(stringtable+8);
                     break;
                 case 0x08:
                 case 0x09:
@@ -4851,10 +4914,10 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                        JIT code. But those aren't the common cases, so
                        let's not bother. */
                     context.code.push("var otype, retval;");
-                    context.code.push("var oaddr = "+Mem4(node)+";");
+                    context.code.push("var oaddr = "+memmap.read4(node)+";");
                     if (nodetype === 0x09 || nodetype === 0x0B)
-                        context.code.push("oaddr = Mem4(oaddr);");
-                    context.code.push("otype = Mem1(oaddr);");
+                        context.code.push("oaddr = memmap.read4(oaddr);");
+                    context.code.push("otype = memmap.read1(oaddr);");
                     retval = "retval";
                     done = true;
 
@@ -4865,9 +4928,9 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     context.code.push("else if (otype >= 0xC0 && otype <= 0xDF) {");
                     var argc = 0;
                     if (nodetype === 0x0A || nodetype === 0x0B) {
-                        argc = Mem4(node+4);
+                        argc = memmap.read4(node+4);
                         for (var ix=0; ix<argc; ix++)
-                            context.code.push("tempcallargs["+ix+"]="+Mem4(node+8+4*ix)+";");
+                            context.code.push("tempcallargs["+ix+"]="+memmap.read4(node+8+4*ix)+";");
                     }
                     context.code.push("enter_function(oaddr, "+argc+");");
                     context.code.push("retval = true;");
@@ -4888,7 +4951,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
         switch (curiosys) {
         case 2: /* glk */
             while (1) {
-                ch = Mem1(addr);
+                ch = memmap.read1(addr);
                 addr++;
                 if (ch === 0)
                     break;
@@ -4898,7 +4961,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
         case 1: /* filter */
             oputil_flush_string(context);
             oputil_push_substring_callstub(context);
-            ch = Mem1(addr);
+            ch = memmap.read1(addr);
             addr++;
             if (ch !== 0) {
                 oputil_push_callstub(context, "0x13,0", addr);
@@ -4917,7 +4980,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
         switch (curiosys) {
         case 2: /* glk */
             while (1) {
-                ch = Mem4(addr);
+                ch = memmap.read4(addr);
                 addr+=4;
                 if (ch === 0)
                     break;
@@ -4927,7 +4990,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
         case 1: /* filter */
             oputil_flush_string(context);
             oputil_push_substring_callstub(context);
-            ch = Mem4(addr);
+            ch = memmap.read4(addr);
             addr+=4;
             if (ch !== 0) {
                 oputil_push_callstub(context, "0x14,0", addr);
@@ -5033,7 +5096,7 @@ function fetch_search_key(addr, len, options) {
     if (options & 1) {
         /* indirect key */
         for (ix=0; ix<len; ix++)
-            tempsearchkey[ix] = Mem1(addr+ix);
+            tempsearchkey[ix] = memmap.read1(addr+ix);
     }
     else {
         switch (len) {
@@ -5069,7 +5132,7 @@ function linear_search(key, keysize, start,
     for (count=0; count<numstructs; count++, start+=structsize) {
         match = true;
         for (ix=0; match && ix<keysize; ix++) {
-            byt = Mem1(start + keyoffset + ix);
+            byt = memmap.read1(start + keyoffset + ix);
             if (byt !== keybuf[ix])
                 match = false;
         }
@@ -5084,7 +5147,7 @@ function linear_search(key, keysize, start,
         if (zeroterm) {
             match = true;
             for (ix=0; match && ix<keysize; ix++) {
-                byt = Mem1(start + keyoffset + ix);
+                byt = memmap.read1(start + keyoffset + ix);
                 if (byt !== 0)
                     match = false;
             }
@@ -5116,7 +5179,7 @@ function binary_search(key, keysize, start,
         val = (top+bot) >> 1;
         addr = start + val * structsize;
         for (ix=0; (!cmp) && ix<keysize; ix++) {
-            byt = Mem1(addr + keyoffset + ix);
+            byt = memmap.read1(addr + keyoffset + ix);
             byt2 = keybuf[ix];
             if (byt < byt2)
                 cmp = -1;
@@ -5155,7 +5218,7 @@ function linked_search(key, keysize, start,
     while (start !== 0) {
         match = true;
         for (ix=0; match && ix<keysize; ix++) {
-            byt = Mem1(start + keyoffset + ix);
+            byt = memmap.read1(start + keyoffset + ix);
             if (byt !== keybuf[ix])
                 match = false;
         }
@@ -5167,7 +5230,7 @@ function linked_search(key, keysize, start,
         if (zeroterm) {
             match = true;
             for (ix=0; match && ix<keysize; ix++) {
-                byt = Mem1(start + keyoffset + ix);
+                byt = memmap.read1(start + keyoffset + ix);
                 if (byt !== 0)
                     match = false;
             }
@@ -5177,7 +5240,7 @@ function linked_search(key, keysize, start,
             }
         }
 
-        start = Mem4(start + nextoffset);
+        start = memmap.read4(start + nextoffset);
     }
 
     return 0;
@@ -5447,7 +5510,7 @@ function vm_restart() {
 
     /* Build (or rebuild) main memory array. */
     memmap = null; // garbage-collect old memmap
-    memmap = game_image.slice(0, endgamefile);
+    memmap = new Memory(game_image).slice(0, endgamefile);
     endmem = memmap.length;
     change_memsize(origendmem, false);
     /* endmem is now origendmem */
