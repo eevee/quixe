@@ -192,7 +192,8 @@ function quixe_init() {
         setup_bytestring_table();
         setup_operandlist_table();
 
-        setup_vm();
+        var vm = new VM();
+        vm.setup();
         execute_loop();
     }
     catch (ex) {
@@ -543,13 +544,28 @@ function fatal_error(msg) {
    return a closure inside the Quixe environment. (All the generated
    code assumes that it has the VM's internal variables in scope.)
 */
-function make_code(val, arg) {
-    if (arg === undefined)
-        eval("function _func() {\n" + val + "\n}");
+function make_code(addr, val, arg) {
+    if (arg)
+        arg = "vm," + arg;
     else
-        eval("function _func("+arg+") {\n" + val + "\n}");
-    return _func;
+        arg = "vm"
+    return eval("(function _func__"+addr+"("+arg+") {\n" + val + "\n})");
 }
+
+function VM() {
+
+    // TODO refs to globals
+    this.stack = stack;  // TODO need to fix places that mutate me
+}
+
+VM.prototype.add_frame = function(frame_) {
+    this.stack.push(frame_);
+    frame = frame_;  // TODO mutates a global
+};
+
+VM.prototype.current_frame = function() {
+    return this.stack[this.stack.length - 1];
+};
 
 /* The VMFunc class: Everything we know about a function. This includes the
    layout of the local variables, the compiled paths for various start points
@@ -1543,7 +1559,7 @@ var opcode_table = {
             context.code.push("for (ix=0; ix<"+operands[1]+"; ix++) { tempcallargs[ix]=frame.valstack.pop(); }");
         }
         oputil_push_callstub(context, operands[2]);
-        context.code.push("enter_function("+operands[0]+", "+operands[1]+");");
+        context.code.push("vm.enter_function("+operands[0]+", "+operands[1]+");");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -1571,7 +1587,7 @@ var opcode_table = {
         /* Note that tailcall in the top-level function will not work.
            But why would you do that? */
         context.code.push("leave_function();");
-        context.code.push("enter_function("+operands[0]+", "+operands[1]+");");
+        context.code.push("vm.enter_function("+operands[0]+", "+operands[1]+");");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -1579,7 +1595,7 @@ var opcode_table = {
     0x160: function(context, operands) { /* callf */
         oputil_unload_offstate(context);
         oputil_push_callstub(context, operands[1]);
-        context.code.push("enter_function("+operands[0]+", 0);");
+        context.code.push("vm.enter_function("+operands[0]+", 0);");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -1588,7 +1604,7 @@ var opcode_table = {
         oputil_unload_offstate(context);
         context.code.push("tempcallargs[0]=("+operands[1]+");");
         oputil_push_callstub(context, operands[2]);
-        context.code.push("enter_function("+operands[0]+", 1);");
+        context.code.push("vm.enter_function("+operands[0]+", 1);");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -1598,7 +1614,7 @@ var opcode_table = {
         context.code.push("tempcallargs[0]=("+operands[1]+");");
         context.code.push("tempcallargs[1]=("+operands[2]+");");
         oputil_push_callstub(context, operands[3]);
-        context.code.push("enter_function("+operands[0]+", 2);");
+        context.code.push("vm.enter_function("+operands[0]+", 2);");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -1609,7 +1625,7 @@ var opcode_table = {
         context.code.push("tempcallargs[1]=("+operands[2]+");");
         context.code.push("tempcallargs[2]=("+operands[3]+");");
         oputil_push_callstub(context, operands[4]);
-        context.code.push("enter_function("+operands[0]+", 3);");
+        context.code.push("vm.enter_function("+operands[0]+", 3);");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -2058,7 +2074,7 @@ var opcode_table = {
         context.offstack.length = 0;
         context.offloc.length = 0;
         context.offlocdirty.length = 0;
-        context.code.push("vm_restart();");
+        context.code.push("vm.restart();");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -2204,7 +2220,7 @@ var opcode_table = {
             oputil_unload_offstate(context);
             context.code.push("tempcallargs[0]=(("+operands[0]+")&0xff);");
             oputil_push_callstub(context, "0,0");
-            context.code.push("enter_function(iosysrock, 1);");
+            context.code.push("vm.enter_function(iosysrock, 1);");
             context.code.push("return;");
             context.path_ends = true;
             break;
@@ -2265,7 +2281,7 @@ var opcode_table = {
             oputil_unload_offstate(context);
             context.code.push("tempcallargs[0]=("+operands[0]+");");
             oputil_push_callstub(context, "0,0");
-            context.code.push("enter_function(iosysrock, 1);");
+            context.code.push("vm.enter_function(iosysrock, 1);");
             context.code.push("return;");
             context.path_ends = true;
             break;
@@ -3528,7 +3544,7 @@ function compile_path(vmfunc, startaddr, startiosys) {
     }
 
     //qlog("### code at " + startaddr.toString(16) + ":\n" + context.code.join("\n"));
-    return make_code(context.code.join("\n"));
+    return make_code(vmfunc.funcaddr, context.code.join("\n"));
 }
 
 /* Prepare for execution of a new function. The argcount is the number
@@ -3540,7 +3556,7 @@ function compile_path(vmfunc, startaddr, startiosys) {
    (or valstack, for a 0xC0 function.) The pc is set to the function's
    starting address.
 */
-function enter_function(addr, argcount) {
+VM.prototype.enter_function = function(addr, argcount) {
     var ix;
 
     total_function_calls++; //###stats
@@ -3564,14 +3580,16 @@ function enter_function(addr, argcount) {
 
     pc = vmfunc.startpc;
 
-    var newframe = new StackFrame(vmfunc);
-    newframe.depth = stack.length;
-    if (stack.length === 0)
-        newframe.framestart = 0;
-    else
-        newframe.framestart = frame.framestart + frame.framelen + 4*frame.valstack.length;
-    stack.push(newframe);
-    frame = newframe;
+    var frame = new StackFrame(vmfunc);
+    frame.depth = stack.length;
+    if (stack.length === 0) {
+        frame.framestart = 0;
+    }
+    else {
+        var lastframe = this.stack[this.stack.length - 1];
+        frame.framestart = lastframe.framestart + lastframe.framelen + 4*lastframe.valstack.length;
+    }
+    this.add_frame(frame);
 
     if (vmfunc.functype === 0xC0) {
         /* Push the function arguments on the stack. The locals have already
@@ -3599,7 +3617,8 @@ function enter_function(addr, argcount) {
     }
 
     //qlog("### framestart " + frame.framestart + ", filled-in locals " + qobjdump(frame.locals) + ", valstack " + qobjdump(frame.valstack));
-}
+    return frame;
+};
 
 /* Dummy value, thrown as an exception by leave_function(). */
 var ReturnedFromMain = { dummy: 'The top-level function has returned.' };
@@ -4536,7 +4555,8 @@ function stream_string(nextcp, addr, inmiddle, bitnum) {
                 return false;
         }
         else {
-            res = strop(nextcp, substring);
+            var vm = new VM();  // XXX uggh
+            res = strop(vm, nextcp, substring);
             if (res instanceof Array) {
                 /* Entered a substring */
                 substring = true;
@@ -4693,7 +4713,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         oputil_push_substring_callstub(context);
                         oputil_push_callstub(context, "0x10,"+bitnum, addr);
                         context.code.push("tempcallargs[0]="+cab.value+";");
-                        context.code.push("enter_function(iosysrock, 1);");
+                        context.code.push("vm.enter_function(iosysrock, 1);");
                         retval = true;
                         done = true;
                         break;
@@ -4776,7 +4796,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         for (var ix=0; ix<argc; ix++)
                             context.code.push("tempcallargs["+ix+"]="+memmap.read4(cab.addr+8+4*ix)+";");
                     }
-                    context.code.push("enter_function(oaddr, "+argc+");");
+                    context.code.push("vm.enter_function(oaddr, "+argc+");");
                     context.code.push("retval = true;");
                     context.code.push("}");
                     context.code.push("else {");
@@ -4835,7 +4855,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         oputil_push_substring_callstub(context);
                         oputil_push_callstub(context, "0x10,"+bitnum, addr);
                         context.code.push("tempcallargs[0]="+ch+";");
-                        context.code.push("enter_function(iosysrock, 1);");
+                        context.code.push("vm.enter_function(iosysrock, 1);");
                         retval = true;
                         done = true;
                         break;
@@ -4853,7 +4873,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         oputil_push_substring_callstub(context);
                         oputil_push_callstub(context, "0x10,"+bitnum, addr);
                         context.code.push("tempcallargs[0]="+ch+";");
-                        context.code.push("enter_function(iosysrock, 1);");
+                        context.code.push("vm.enter_function(iosysrock, 1);");
                         retval = true;
                         done = true;
                         break;
@@ -4932,7 +4952,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         for (var ix=0; ix<argc; ix++)
                             context.code.push("tempcallargs["+ix+"]="+memmap.read4(node+8+4*ix)+";");
                     }
-                    context.code.push("enter_function(oaddr, "+argc+");");
+                    context.code.push("vm.enter_function(oaddr, "+argc+");");
                     context.code.push("retval = true;");
                     context.code.push("}");
                     context.code.push("else {");
@@ -4966,7 +4986,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
             if (ch !== 0) {
                 oputil_push_callstub(context, "0x13,0", addr);
                 context.code.push("tempcallargs[0]="+ch+";");
-                context.code.push("enter_function(iosysrock, 1);");
+                context.code.push("vm.enter_function(iosysrock, 1);");
                 retval = true;
             }
             else {
@@ -4995,7 +5015,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
             if (ch !== 0) {
                 oputil_push_callstub(context, "0x14,0", addr);
                 context.code.push("tempcallargs[0]="+ch+";");
-                context.code.push("enter_function(iosysrock, 1);");
+                context.code.push("vm.enter_function(iosysrock, 1);");
                 retval = true;
             }
             else {
@@ -5022,7 +5042,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
     else {
         oputil_flush_string(context);
         context.code.push("return " + retval + ";");
-        return make_code(context.code.join("\n"), "nextcp,substring");
+        return make_code(startaddr, context.code.join("\n"), "nextcp,substring");
     }
 }
 
@@ -5428,7 +5448,7 @@ var strings_compiled = 0;
 
 /* Set up all the initial VM state.
 */
-function setup_vm() {
+VM.prototype.setup = function() {
     var val, version;
 
     if (!game_image)
@@ -5438,7 +5458,7 @@ function setup_vm() {
     resumefuncop = null;
     resumevalue = 0;
     memmap = null;
-    stack = [];
+    this.stack = stack = [];
     frame = null;
     pc = 0;
 
@@ -5493,14 +5513,14 @@ function setup_vm() {
     usedlist = [];
     freelist = [];
 
-    vm_restart();
-}
+    this.restart();
+};
 
 /* Put the VM into a state where it's ready to begin executing the
    game. This is called both at startup time, and when the machine
    performs a "restart" opcode.
 */
-function vm_restart() {
+VM.prototype.restart = function() {
     var ix;
 
     /* Deactivate the heap (if it was active). */
@@ -5517,7 +5537,7 @@ function vm_restart() {
 
     paste_protected_range(protect);
 
-    stack = [];
+    this.stack = stack = [];
     frame = null;
     pc = 0;
     iosysmode = 0;
@@ -5527,10 +5547,11 @@ function vm_restart() {
     /* Note that we do not reset the protection range. */
 
     /* Push the first function call. (No arguments.) */
-    enter_function(startfuncaddr, 0);
+    this.enter_function(startfuncaddr, 0);
+    qlog(this.stack, stack);
 
     /* We're now ready to execute. */
-}
+};
 
 /* Run-length-encode an array, for Quetzal. */
 function compress_bytes(arr) {
@@ -6334,9 +6355,11 @@ function execute_loop() {
 
     pathstart = new Date().getTime(); //###stats
 
+    var vm = new VM();
+
     while (!done_executing) {
         //qlog("### pc now " + pc.toString(16));
-        vmfunc = frame.vmfunc;
+        vmfunc = vm.current_frame().vmfunc;
         pathtab = vmfunc[iosysmode];
         path = pathtab[pc];
         if (path === undefined) {
@@ -6350,7 +6373,7 @@ function execute_loop() {
         }
         total_path_calls++; //###stats
         try {
-            path();
+            path(vm);
         }
         catch (ex) {
             if (ex === ReturnedFromMain) {
