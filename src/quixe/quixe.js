@@ -383,14 +383,14 @@ function ByteReadString(arr, addr, len) {
 }
 
 function QuoteMem1(addr) {
-    var val = memmap.read1(addr);
+    var val = _xxx_vm.memmap.read1(addr);
     if (val >= 0x80)
         return "0xffffff" + bytestring_table[val];
     return "0x" + bytestring_table[val];
 }
 function QuoteMem2(addr) {
-    var val0 = memmap.read1(addr);
-    var val1 = memmap.read1(addr + 1);
+    var val0 = _xxx_vm.memmap.read1(addr);
+    var val1 = _xxx_vm.memmap.read1(addr + 1);
     if (val0 >= 0x80)
         return "0xffff" + bytestring_table[val0] + bytestring_table[val1];
     if (val0)
@@ -398,10 +398,10 @@ function QuoteMem2(addr) {
     return "0x" + bytestring_table[val1];
 }
 function QuoteMem4(addr) {
-    var val0 = memmap.read1(addr);
-    var val1 = memmap.read1(addr + 1);
-    var val2 = memmap.read1(addr + 2);
-    var val3 = memmap.read1(addr + 3);
+    var val0 = _xxx_vm.memmap.read1(addr);
+    var val1 = _xxx_vm.memmap.read1(addr + 1);
+    var val2 = _xxx_vm.memmap.read1(addr + 2);
+    var val3 = _xxx_vm.memmap.read1(addr + 3);
     if (val0)
         return "0x" + bytestring_table[val0] + bytestring_table[val1] + bytestring_table[val2] + bytestring_table[val3];
     if (val1)
@@ -413,44 +413,44 @@ function QuoteMem4(addr) {
 
 function ReadArgByte(addr) {
     if (addr === 0xffffffff)
-        return frame.valstack.pop() & 0xFF;
+        return _xxx_vm.frame.valstack.pop() & 0xFF;
     else
-        return memmap.read1(addr);
+        return _xxx_vm.memmap.read1(addr);
 }
 
 function WriteArgByte(addr, val) {
     if (addr === 0xffffffff)
-        frame.valstack.push(val & 0xFF);
+        _xxx_vm.frame.valstack.push(val & 0xFF);
     else
-        memmap.write1(addr, val);
+        _xxx_vm.memmap.write1(addr, val);
 }
 
 function ReadArgWord(addr) {
     if (addr === 0xffffffff)
-        return frame.valstack.pop();
+        return _xxx_vm.frame.valstack.pop();
     else
-        return memmap.read4(addr);
+        return _xxx_vm.memmap.read4(addr);
 }
 
 function WriteArgWord(addr, val) {
     if (addr === 0xffffffff)
-        frame.valstack.push(val);
+        _xxx_vm.frame.valstack.push(val);
     else
-        memmap.write4(addr, val);
+        _xxx_vm.memmap.write4(addr, val);
 }
 
 function ReadStructField(addr, fieldnum) {
     if (addr === 0xffffffff)
-        return frame.valstack.pop();
+        return _xxx_vm.frame.valstack.pop();
     else
-        return memmap.read4(addr + 4*fieldnum);
+        return _xxx_vm.memmap.read4(addr + 4*fieldnum);
 }
 
 function WriteStructField(addr, fieldnum, val) {
     if (addr === 0xffffffff)
-        frame.valstack.push(val);
+        _xxx_vm.frame.valstack.push(val);
     else
-        memmap.write4(addr + 4*fieldnum, val);
+        _xxx_vm.memmap.write4(addr + 4*fieldnum, val);
 }
 
 /* GiDispa calls this, right before resuming execution at the end of a
@@ -559,13 +559,20 @@ function VM() {
     this.glk = Glk;
     this.dispatcher = GiDispa;
 
+    this.memmap = undefined;
     // TODO refs to globals
-    this.stack = stack;  // TODO need to fix places that mutate me
+    // TODO need to fix places that mutate this
+    this.stack = stack;
+    this.frame = undefined;  /* the top of the stack */
+
+    /* The VM registers. */
+    this.pc = undefined;
+    this.endmem = undefined;
 }
 
 VM.prototype.add_frame = function(frame_) {
     this.stack.push(frame_);
-    frame = frame_;  // TODO mutates a global
+    this.frame = frame_;
 };
 
 VM.prototype.current_frame = function() {
@@ -597,7 +604,7 @@ function VMFunc(funcaddr, startpc, localsformat, rawformat) {
     else {
         this.funcaddr = funcaddr;
         this.startpc = startpc;
-        this.functype = memmap.read1(funcaddr); /* 0xC0 or 0xC1 */
+        this.functype = _xxx_vm.memmap.read1(funcaddr); /* 0xC0 or 0xC1 */
     }
 
     /* Addresses of all known (or predicted) paths for this function. */
@@ -1123,25 +1130,25 @@ function oputil_store(context, funcop, operand) {
         store_offloc_value(context, funcop.addr, undefined);
         /* Store directly to the locals array. */
         if (funcop.argsize === 4) {
-            context.code.push("frame.locals["+funcop.addr+"]=("+operand+");");
+            context.code.push("vm.frame.locals["+funcop.addr+"]=("+operand+");");
         }
         else if (funcop.argsize === 2) {
-            context.code.push("frame.locals["+funcop.addr+"]=(0xffff &"+operand+");");
+            context.code.push("vm.frame.locals["+funcop.addr+"]=(0xffff &"+operand+");");
         }
         else {
-            context.code.push("frame.locals["+funcop.addr+"]=(0xff &"+operand+");");
+            context.code.push("vm.frame.locals["+funcop.addr+"]=(0xff &"+operand+");");
         }
         return;
 
     case 15: /* The main-memory cases. */
         if (funcop.argsize === 4) {
-            context.code.push("memmap.write4("+funcop.addr+","+operand+");");
+            context.code.push("vm.memmap.write4("+funcop.addr+","+operand+");");
         }
         else if (funcop.argsize === 2) {
-            context.code.push("memmap.write2("+funcop.addr+","+operand+");");
+            context.code.push("vm.memmap.write2("+funcop.addr+","+operand+");");
         }
         else {
-            context.code.push("memmap.write1("+funcop.addr+","+operand+");");
+            context.code.push("vm.memmap.write1("+funcop.addr+","+operand+");");
         }
         return;
 
@@ -1160,7 +1167,7 @@ function oputil_store(context, funcop, operand) {
 function oputil_push_callstub(context, operand, addr) {
     if (addr === undefined)
         addr = context.cp;
-    context.code.push("frame.valstack.push("+operand+","+addr+",frame.framestart);");
+    context.code.push("vm.frame.valstack.push("+operand+","+addr+",vm.frame.framestart);");
 }
 
 /* Conditionally push a type-0x11 call stub. This logically happens at
@@ -1173,7 +1180,7 @@ function oputil_push_callstub(context, operand, addr) {
 */
 function oputil_push_substring_callstub(context) {
     context.code.push("if (!substring) { substring=true;");
-    context.code.push("frame.valstack.push(0x11,0,nextcp,frame.framestart);");
+    context.code.push("vm.frame.valstack.push(0x11,0,nextcp,vm.frame.framestart);");
     context.code.push("}");
 }
 
@@ -1190,12 +1197,12 @@ function oputil_unload_offstate(context, keepstack) {
     var ix;
     ;;;context.code.push("// unload offstate: " + context.offstack.length + " stack" + (context.offloc.length ? ", plus locs" : "") + (keepstack ? " (conditional)" : "")); //debug
     if (context.offstack.length) {
-        context.code.push("frame.valstack.push("+context.offstack.join(",")+");");
+        context.code.push("vm.frame.valstack.push("+context.offstack.join(",")+");");
     }
     if (context.offloc.length) {
         for (ix=0; ix<context.offloc.length; ix++) {
             if (context.offloc[ix] !== undefined && context.offlocdirty[ix]) {
-                context.code.push("frame.locals["+ix+"]="+context.offloc[ix]+";");
+                context.code.push("vm.frame.locals["+ix+"]="+context.offloc[ix]+";");
             }
         }
     }
@@ -1312,24 +1319,24 @@ function oputil_perform_jump(context, operand, unconditional) {
             else {
                 ;;;context.code.push("// ignoring offstack for conditional return: " + context.offstack.length); //debug
             }
-            context.code.push("leave_function();");
+            context.code.push("vm.leave_function();");
             context.code.push("vm.pop_callstub("+val+");");
         }
         else {
             oputil_unload_offstate(context, !unconditional);
             var newpc = (context.cp+val-2) >>>0;
-            context.code.push("pc = "+newpc+";");
+            context.code.push("vm.pc = "+newpc+";");
             context.vmfunc.pathaddrs[newpc] = true;
         }
     }
     else {
         oputil_unload_offstate(context, !unconditional);
         context.code.push("if (("+operand+")===0 || ("+operand+")===1) {");
-        context.code.push("leave_function();");
+        context.code.push("vm.leave_function();");
         context.code.push("vm.pop_callstub("+operand+");");
         context.code.push("}");
         context.code.push("else {");
-        context.code.push("pc = ("+context.cp+"+("+operand+")-2) >>>0;");
+        context.code.push("vm.pc = ("+context.cp+"+("+operand+")-2) >>>0;");
         context.code.push("}");
     }
     context.code.push("return;");
@@ -1461,11 +1468,11 @@ var opcode_table = {
     0x104: function(context, operands) { /* jumpabs */
         if (quot_isconstant(operands[0])) {
             var newpc = Number(operands[0]);
-            context.code.push("pc = "+newpc+";");
+            context.code.push("vm.pc = "+newpc+";");
             context.vmfunc.pathaddrs[newpc] = true;
         }
         else {
-            context.code.push("pc = "+operands[0]+";");
+            context.code.push("vm.pc = "+operands[0]+";");
         }
         oputil_unload_offstate(context);
         context.code.push("return;");
@@ -1553,7 +1560,7 @@ var opcode_table = {
     },
 
     0x30: function(context, operands) { /* call */
-        context.code.push("var tempcallargs = new Array("+operands[1]+");");
+        context.code.push("var tempcallargs = [];");
         if (quot_isconstant(operands[1])) {
             var ix;
             var argc = Number(operands[1]);
@@ -1563,7 +1570,7 @@ var opcode_table = {
                     context.code.push("tempcallargs["+ix+"]="+holdvar+";");
                 }
                 else {
-                    context.code.push("tempcallargs["+ix+"]=frame.valstack.pop();");
+                    context.code.push("tempcallargs["+ix+"]=vm.frame.valstack.pop();");
                 }
             }
             oputil_unload_offstate(context);
@@ -1571,7 +1578,7 @@ var opcode_table = {
         else {
             context.varsused["ix"] = true;
             oputil_unload_offstate(context);
-            context.code.push("for (ix=0; ix<"+operands[1]+"; ix++) { tempcallargs[ix]=frame.valstack.pop(); }");
+            context.code.push("for (ix=0; ix<"+operands[1]+"; ix++) { tempcallargs[ix]=vm.frame.valstack.pop(); }");
         }
         oputil_push_callstub(context, operands[2]);
         context.code.push("vm.enter_function("+operands[0]+", tempcallargs);");
@@ -1580,7 +1587,7 @@ var opcode_table = {
     },
 
     0x34: function(context, operands) { /* tailcall */
-        context.code.push("var tempcallargs = new Array("+operands[1]+");");
+        context.code.push("var tempcallargs = [];");
         if (quot_isconstant(operands[1])) {
             var ix;
             var argc = Number(operands[1]);
@@ -1590,7 +1597,7 @@ var opcode_table = {
                     context.code.push("tempcallargs["+ix+"]="+holdvar+";");
                 }
                 else {
-                    context.code.push("tempcallargs["+ix+"]=frame.valstack.pop();");
+                    context.code.push("tempcallargs["+ix+"]=vm.frame.valstack.pop();");
                 }
             }
             oputil_unload_offstate(context);
@@ -1598,11 +1605,11 @@ var opcode_table = {
         else {
             context.varsused["ix"] = true;
             oputil_unload_offstate(context);
-            context.code.push("for (ix=0; ix<"+operands[1]+"; ix++) { tempcallargs[ix]=frame.valstack.pop(); }");
+            context.code.push("for (ix=0; ix<"+operands[1]+"; ix++) { tempcallargs[ix]=vm.frame.valstack.pop(); }");
         }
         /* Note that tailcall in the top-level function will not work.
            But why would you do that? */
-        context.code.push("leave_function();");
+        context.code.push("vm.leave_function();");
         context.code.push("vm.enter_function("+operands[0]+", tempcallargs);");
         context.code.push("return;");
         context.path_ends = true;
@@ -1647,7 +1654,7 @@ var opcode_table = {
         context.offstack.length = 0;
         context.offloc.length = 0;
         context.offlocdirty.length = 0;
-        context.code.push("leave_function();");
+        context.code.push("vm.leave_function();");
         context.code.push("vm.pop_callstub("+operands[0]+");");
         context.code.push("return;");
         context.path_ends = true;
@@ -1656,7 +1663,7 @@ var opcode_table = {
     0x32: function(context, operands) { /* catch */
         oputil_unload_offstate(context);
         oputil_push_callstub(context, operands[0]);
-        context.code.push("store_operand("+operands[0]+",frame.framestart+frame.framelen+4*frame.valstack.length);");
+        context.code.push("vm.store_operand("+operands[0]+",vm.frame.framestart+vm.frame.framelen+4*vm.frame.valstack.length);");
         oputil_perform_jump(context, operands[1], true);
         context.path_ends = true;
     },
@@ -1668,7 +1675,7 @@ var opcode_table = {
         context.offstack.length = 0;
         context.offloc.length = 0;
         context.offlocdirty.length = 0;
-        context.code.push("pop_stack_to("+operands[1]+");");
+        context.code.push("vm.pop_stack_to("+operands[1]+");");
         context.code.push("vm.pop_callstub("+operands[0]+");");
         context.code.push("return;");
         context.path_ends = true;
@@ -1716,18 +1723,18 @@ var opcode_table = {
             if (quot_isconstant(operands[0])) {
                 /* Both operands constant */
                 addr = Number(operands[0]) + Number(operands[1]) * 4;
-                val = "memmap.read4("+(addr >>>0)+")";
+                val = "vm.memmap.read4("+(addr >>>0)+")";
             }
             else {
                 var addr = Number(operands[1]) * 4;
                 if (addr)
-                    val = "memmap.read4(("+operands[0]+"+"+addr+") >>>0)";
+                    val = "vm.memmap.read4(("+operands[0]+"+"+addr+") >>>0)";
                 else
-                    val = "memmap.read4("+operands[0]+")";
+                    val = "vm.memmap.read4("+operands[0]+")";
             }
         }
         else {
-            val = "memmap.read4(("+operands[0]+"+4*"+operands[1]+") >>>0)";
+            val = "vm.memmap.read4(("+operands[0]+"+4*"+operands[1]+") >>>0)";
         }
         context.code.push(operands[2]+val+");");
     },
@@ -1738,18 +1745,18 @@ var opcode_table = {
             if (quot_isconstant(operands[0])) {
                 /* Both operands constant */
                 addr = Number(operands[0]) + Number(operands[1]) * 2;
-                val = "memmap.read2("+(addr >>>0)+")";
+                val = "vm.memmap.read2("+(addr >>>0)+")";
             }
             else {
                 var addr = Number(operands[1]) * 2;
                 if (addr)
-                    val = "memmap.read2(("+operands[0]+"+"+addr+") >>>0)";
+                    val = "vm.memmap.read2(("+operands[0]+"+"+addr+") >>>0)";
                 else
-                    val = "memmap.read2("+operands[0]+")";
+                    val = "vm.memmap.read2("+operands[0]+")";
             }
         }
         else {
-            val = "memmap.read2(("+operands[0]+"+2*"+operands[1]+") >>>0)";
+            val = "vm.memmap.read2(("+operands[0]+"+2*"+operands[1]+") >>>0)";
         }
         context.code.push(operands[2]+val+");");
     },
@@ -1760,18 +1767,18 @@ var opcode_table = {
             if (quot_isconstant(operands[0])) {
                 /* Both operands constant */
                 addr = Number(operands[0]) + Number(operands[1]);
-                val = "memmap.read1("+(addr >>>0)+")";
+                val = "vm.memmap.read1("+(addr >>>0)+")";
             }
             else {
                 var addr = Number(operands[1]);
                 if (addr)
-                    val = "memmap.read1(("+operands[0]+"+"+addr+") >>>0)";
+                    val = "vm.memmap.read1(("+operands[0]+"+"+addr+") >>>0)";
                 else
-                    val = "memmap.read1("+operands[0]+")";
+                    val = "vm.memmap.read1("+operands[0]+")";
             }
         }
         else {
-            val = "memmap.read1(("+operands[0]+"+"+operands[1]+") >>>0)";
+            val = "vm.memmap.read1(("+operands[0]+"+"+operands[1]+") >>>0)";
         }
         context.code.push(operands[2]+val+");");
     },
@@ -1795,7 +1802,7 @@ var opcode_table = {
         else {
             val = "("+operands[0]+"+4*"+operands[1]+") >>>0"+",";
         }
-        context.code.push("memmap.write4("+val+operands[2]+")"+";");
+        context.code.push("vm.memmap.write4("+val+operands[2]+")"+";");
     },
 
     0x4d: function(context, operands) { /* astores */
@@ -1817,7 +1824,7 @@ var opcode_table = {
         else {
             val = "("+operands[0]+"+2*"+operands[1]+") >>>0"+",";
         }
-        context.code.push("memmap.write2("+val+operands[2]+")"+";");
+        context.code.push("vm.memmap.write2("+val+operands[2]+")"+";");
     },
 
     0x4e: function(context, operands) { /* astoreb */
@@ -1839,7 +1846,7 @@ var opcode_table = {
         else {
             val = "("+operands[0]+"+"+operands[1]+") >>>0"+",";
         }
-        context.code.push("memmap.write1("+val+operands[2]+")"+";");
+        context.code.push("vm.memmap.write1("+val+operands[2]+")"+";");
     },
 
     0x4b: function(context, operands) { /* aloadbit */
@@ -1867,7 +1874,7 @@ var opcode_table = {
                     addrx = (operands[0]+"-"+(1+((-1-bitnum)>>3)));
                 }
             }
-            context.code.push(operands[2]+"(memmap.read1("+addrx+") & "+(1<<bitx)+")?1:0);");
+            context.code.push(operands[2]+"(vm.memmap.read1("+addrx+") & "+(1<<bitx)+")?1:0);");
         }
         else {
             context.varsused["bitx"] = true;
@@ -1876,7 +1883,7 @@ var opcode_table = {
             context.code.push("bitx = "+sign1+"&7;");
             context.code.push("if ("+sign1+">=0) addrx = "+operands[0]+" + ("+sign1+">>3);");
             context.code.push("else addrx = "+operands[0]+" - (1+((-1-("+sign1+"))>>3));");
-            context.code.push(operands[2]+"(memmap.read1(addrx) & (1<<bitx))?1:0);");
+            context.code.push(operands[2]+"(vm.memmap.read1(addrx) & (1<<bitx))?1:0);");
         }
     },
 
@@ -1919,13 +1926,13 @@ var opcode_table = {
         }
         if (quot_isconstant(operands[2])) {
             if (Number(operands[2]))
-                context.code.push("memmap.write1("+addrx+", memmap.read1("+addrx+") | "+mask+");");
+                context.code.push("vm.memmap.write1("+addrx+", vm.memmap.read1("+addrx+") | "+mask+");");
             else
-                context.code.push("memmap.write1("+addrx+", memmap.read1("+addrx+") & ~("+mask+"));");
+                context.code.push("vm.memmap.write1("+addrx+", vm.memmap.read1("+addrx+") & ~("+mask+"));");
         }
         else {
-            context.code.push("if ("+operands[2]+") memmap.write1("+addrx+", memmap.read1("+addrx+") | "+mask+");");
-            context.code.push("else memmap.write1("+addrx+", memmap.read1("+addrx+") & ~("+mask+"));");
+            context.code.push("if ("+operands[2]+") vm.memmap.write1("+addrx+", vm.memmap.read1("+addrx+") | "+mask+");");
+            context.code.push("else vm.memmap.write1("+addrx+", vm.memmap.read1("+addrx+") & ~("+mask+"));");
         }
     },
 
@@ -1933,9 +1940,9 @@ var opcode_table = {
         var val;
         var count = context.offstack.length;
         if (count)
-            val = "frame.valstack.length+" + count;
+            val = "vm.frame.valstack.length+" + count;
         else
-            val = "frame.valstack.length";
+            val = "vm.frame.valstack.length";
         oputil_store(context, operands[0], val);
     },
 
@@ -1947,12 +1954,12 @@ var opcode_table = {
                 val = context.offstack[context.offstack.length-(pos+1)];
             }
             else {
-                val = "frame.valstack[frame.valstack.length-"+((pos+1)-context.offstack.length)+"]";
+                val = "vm.frame.valstack[vm.frame.valstack.length-"+((pos+1)-context.offstack.length)+"]";
             }
         }
         else {
             oputil_unload_offstate(context);
-            val = "frame.valstack[frame.valstack.length-("+operands[0]+"+1)]";
+            val = "vm.frame.valstack[vm.frame.valstack.length-("+operands[0]+"+1)]";
         }
         oputil_store(context, operands[1], val);
     },
@@ -1984,9 +1991,9 @@ var opcode_table = {
         context.code.push("vals1 = "+sign0+" - (-("+sign1+")) % "+sign0+";");
         context.code.push("}");
         context.code.push("if (vals1) {");
-        context.code.push("pos = frame.valstack.length - "+sign0+";");
-        context.code.push("roll = frame.valstack.slice(frame.valstack.length-vals1, frame.valstack.length).concat(frame.valstack.slice(pos, frame.valstack.length-vals1));");
-        context.code.push("for (ix=0; ix<"+sign0+"; ix++) { frame.valstack[pos+ix] = roll[ix]; }");
+        context.code.push("pos = vm.frame.valstack.length - "+sign0+";");
+        context.code.push("roll = vm.frame.valstack.slice(vm.frame.valstack.length-vals1, vm.frame.valstack.length).concat(vm.frame.valstack.slice(pos, vm.frame.valstack.length-vals1));");
+        context.code.push("for (ix=0; ix<"+sign0+"; ix++) { vm.frame.valstack[pos+ix] = roll[ix]; }");
         context.code.push("roll = undefined;");
         context.code.push("}");
         context.code.push("}");
@@ -2000,14 +2007,14 @@ var opcode_table = {
             for (ix=0; ix<pos; ix++) {
                 holdvar = alloc_holdvar(context, true);
                 context.offstack.push(holdvar);
-                context.code.push(holdvar+"=frame.valstack[frame.valstack.length-"+(pos-ix)+"];");
+                context.code.push(holdvar+"=vm.frame.valstack[vm.frame.valstack.length-"+(pos-ix)+"];");
             }
         }
         else {
             context.varsused["ix"] = true;
             context.varsused["jx"] = true;
-            context.code.push("jx = frame.valstack.length-("+operands[0]+");");
-            context.code.push("for (ix=0; ix<"+operands[0]+"; ix++) { frame.valstack.push(frame.valstack[jx+ix]); }");
+            context.code.push("jx = vm.frame.valstack.length-("+operands[0]+");");
+            context.code.push("for (ix=0; ix<"+operands[0]+"; ix++) { vm.frame.valstack.push(vm.frame.valstack[jx+ix]); }");
         }
     },
 
@@ -2021,11 +2028,11 @@ var opcode_table = {
     },
 
     0x102: function(context, operands) { /* getmemsize */
-        context.code.push(operands[0]+"endmem);");
+        context.code.push(operands[0]+"vm.endmem);");
     },
 
     0x103: function(context, operands) { /* setmemsize */
-        context.code.push("change_memsize("+operands[0]+",false);");
+        context.code.push("vm.change_memsize("+operands[0]+",false);");
         /* An allocation failure is a fatal error, so we always return
            success. */
         context.code.push(operands[1]+"0);");
@@ -2109,7 +2116,7 @@ var opcode_table = {
         /* Failed to restore. Put back the PC, in case it got overwritten. */
         oputil_store(context, operands[1], "1");
         oputil_unload_offstate(context); // again
-        context.code.push("pc = "+context.cp+";");
+        context.code.push("vm.pc = "+context.cp+";");
         context.code.push("}");
         context.code.push("return;");
         context.path_ends = true;
@@ -2135,7 +2142,7 @@ var opcode_table = {
         /* Failed to restore. Put back the PC, in case it got overwritten. */
         oputil_store(context, operands[0], "1");
         oputil_unload_offstate(context); // again
-        context.code.push("pc = "+context.cp+";");
+        context.code.push("vm.pc = "+context.cp+";");
         context.code.push("}");
         context.code.push("return;");
         context.path_ends = true;
@@ -2155,7 +2162,7 @@ var opcode_table = {
         context.varsused["ix"] = true;
         context.code.push("mlen="+operands[0]+";");
         context.code.push("maddr="+operands[1]+";");
-        context.code.push("for (ix=0; ix<mlen; ix++, maddr++) memmap.write1(maddr, 0);");
+        context.code.push("for (ix=0; ix<mlen; ix++, maddr++) vm.memmap.write1(maddr, 0);");
     },
 
     0x171: function(context, operands) { /* mcopy */
@@ -2171,10 +2178,10 @@ var opcode_table = {
            But for a rarely-used opcode, it's not really worth it.
         */
         context.code.push("if (mdest < msrc) {");
-        context.code.push("for (ix=0; ix<mlen; ix++, msrc++, mdest++) memmap.write1(mdest, memmap.read1(msrc));");
+        context.code.push("for (ix=0; ix<mlen; ix++, msrc++, mdest++) vm.memmap.write1(mdest, vm.memmap.read1(msrc));");
         context.code.push("} else {");
         context.code.push("msrc += (mlen-1); mdest += (mlen-1);");
-        context.code.push("for (ix=0; ix<mlen; ix++, msrc--, mdest--) memmap.write1(mdest, memmap.read1(msrc));");
+        context.code.push("for (ix=0; ix<mlen; ix++, msrc--, mdest--) vm.memmap.write1(mdest, vm.memmap.read1(msrc));");
         context.code.push("}");
     },
 
@@ -2253,7 +2260,7 @@ var opcode_table = {
             break;
         case 1: /* filter */
             oputil_unload_offstate(context);
-            context.code.push("stream_num("+context.cp+","+operands[0]+", false, 0);");
+            context.code.push("vm.stream_num("+context.cp+","+operands[0]+", false, 0);");
             /* stream_num always creates a new frame in filter mode. */
             context.code.push("return;");
             context.path_ends = true;
@@ -2322,7 +2329,7 @@ var opcode_table = {
             /* We can't compile with an unknown iosysmode. So, stop
                compiling. */
             oputil_unload_offstate(context);
-            context.code.push("pc = "+context.cp+";");
+            context.code.push("vm.pc = "+context.cp+";");
             context.code.push("return;");
             context.path_ends = true;
         }
@@ -2619,7 +2626,7 @@ var opcode_table = {
                     context.code.push("tempglkargs["+ix+"]="+holdvar+";");
                 }
                 else {
-                    context.code.push("tempglkargs["+ix+"]=frame.valstack.pop();");
+                    context.code.push("tempglkargs["+ix+"]=vm.frame.valstack.pop();");
                 }
             }
             oputil_unload_offstate(context);
@@ -2627,7 +2634,7 @@ var opcode_table = {
         else {
             context.varsused["ix"] = true;
             oputil_unload_offstate(context);
-            context.code.push("for (ix=0; ix<"+operands[1]+"; ix++) { tempglkargs[ix]=frame.valstack.pop(); }");
+            context.code.push("for (ix=0; ix<"+operands[1]+"; ix++) { tempglkargs[ix]=vm.frame.valstack.pop(); }");
         }
         /* In the blocking case, we don't perform a normal store; we write a
            literal form of operands[2] into a global and get out. Fortunately
@@ -2639,7 +2646,7 @@ var opcode_table = {
             context.code.push("if (glkret === Glk.DidNotReturn) {");
             context.code.push("  resumefuncop = "+oputil_record_funcop(operands[2])+";");
             context.code.push("  resumevalue = 0;");
-            context.code.push("  pc = "+context.cp+";");
+            context.code.push("  vm.pc = "+context.cp+";");
             context.code.push("  done_executing = true;");
             context.code.push("  return;");
             context.code.push("}");
@@ -2749,7 +2756,7 @@ function transfer_to_offstack(context, count) {
     while (context.offstack.length < count) {
         holdvar = alloc_holdvar(context, true);
         context.offstack.unshift(holdvar);
-        context.code.push(holdvar+"=frame.valstack.pop();");
+        context.code.push(holdvar+"=vm.frame.valstack.pop();");
     }
 }
 
@@ -2829,7 +2836,7 @@ function parse_operands(context, cp, oplist, operands) {
 
     for (ix=0; ix<oplist.numops; ix++) {
         if ((ix & 1) === 0) {
-            modeval = memmap.read1(modeaddr);
+            modeval = _xxx_vm.memmap.read1(modeaddr);
             mode = (modeval & 0x0F);
         }
         else {
@@ -2848,7 +2855,7 @@ function parse_operands(context, cp, oplist, operands) {
                 }
                 else {
                     holdvar = alloc_holdvar(context);
-                    context.code.push(holdvar+"=frame.valstack.pop();");
+                    context.code.push(holdvar+"=vm.frame.valstack.pop();");
                     operands[ix] = holdvar;
                 }
                 continue;
@@ -2882,15 +2889,15 @@ function parse_operands(context, cp, oplist, operands) {
 
             if (mode >= 9 && mode <= 11) {
                 if (mode === 9) {
-                    addr = memmap.read1(cp);
+                    addr = _xxx_vm.memmap.read1(cp);
                     cp++;
                 }
                 else if (mode === 10) {
-                    addr = memmap.read2(cp);
+                    addr = _xxx_vm.memmap.read2(cp);
                     cp += 2;
                 }
                 else if (mode === 11) {
-                    addr = memmap.read4(cp);
+                    addr = _xxx_vm.memmap.read4(cp);
                     cp += 4;
                 }
 
@@ -2900,13 +2907,13 @@ function parse_operands(context, cp, oplist, operands) {
                 }
 
                 if (oplist.argsize === 4) {
-                    value = "frame.locals["+addr+"]";
+                    value = "vm.frame.locals["+addr+"]";
                 }
                 else if (oplist.argsize === 2) {
-                    value = "frame.locals["+addr+"] & 0xffff";
+                    value = "vm.frame.locals["+addr+"] & 0xffff";
                 }
                 else {
-                    value = "frame.locals["+addr+"] & 0xff";
+                    value = "vm.frame.locals["+addr+"] & 0xff";
                 }
                 holdvar = alloc_holdvar(context, true);
                 context.code.push(holdvar+"=("+value+");");
@@ -2918,32 +2925,32 @@ function parse_operands(context, cp, oplist, operands) {
 
             switch (mode) {
             case 15: /* main memory RAM, four-byte address */
-                addr = memmap.read4(cp) + ramstart;
+                addr = _xxx_vm.memmap.read4(cp) + ramstart;
                 cp += 4;
                 break;
 
             case 14: /* main memory RAM, two-byte address */
-                addr = memmap.read2(cp) + ramstart;
+                addr = _xxx_vm.memmap.read2(cp) + ramstart;
                 cp += 2;
                 break;
 
             case 13: /* main memory RAM, one-byte address */
-                addr = memmap.read1(cp) + ramstart;
+                addr = _xxx_vm.memmap.read1(cp) + ramstart;
                 cp++;
                 break;
 
             case 7: /* main memory, four-byte address */
-                addr = memmap.read4(cp);
+                addr = _xxx_vm.memmap.read4(cp);
                 cp += 4;
                 break;
 
             case 6: /* main memory, two-byte address */
-                addr = memmap.read2(cp);
+                addr = _xxx_vm.memmap.read2(cp);
                 cp += 2;
                 break;
 
             case 5: /* main memory, one-byte address */
-                addr = memmap.read1(cp);
+                addr = _xxx_vm.memmap.read1(cp);
                 cp++;
                 break;
 
@@ -2953,13 +2960,13 @@ function parse_operands(context, cp, oplist, operands) {
 
             /* The main-memory cases. */
             if (oplist.argsize === 4) {
-                value = "memmap.read4("+addr+")";
+                value = "vm.memmap.read4("+addr+")";
             }
             else if (oplist.argsize === 2) {
-                value = "memmap.read2("+addr+")";
+                value = "vm.memmap.read2("+addr+")";
             }
             else {
-                value = "memmap.read1("+addr+")";
+                value = "vm.memmap.read1("+addr+")";
             }
             holdvar = alloc_holdvar(context);
             context.code.push(holdvar+"=("+value+");");
@@ -2975,7 +2982,7 @@ function parse_operands(context, cp, oplist, operands) {
                     operands[ix] = pop_offstack_holdvar(context);
                 }
                 else {
-                    operands[ix] = "frame.valstack.pop()";
+                    operands[ix] = "vm.frame.valstack.pop()";
                 }
                 continue;
 
@@ -3008,15 +3015,15 @@ function parse_operands(context, cp, oplist, operands) {
 
             if (mode >= 9 && mode <= 11) {
                 if (mode === 9) {
-                    addr = memmap.read1(cp);
+                    addr = _xxx_vm.memmap.read1(cp);
                     cp++;
                 }
                 else if (mode === 10) {
-                    addr = memmap.read2(cp);
+                    addr = _xxx_vm.memmap.read2(cp);
                     cp += 2;
                 }
                 else if (mode === 11) {
-                    addr = memmap.read4(cp);
+                    addr = _xxx_vm.memmap.read4(cp);
                     cp += 4;
                 }
 
@@ -3026,13 +3033,13 @@ function parse_operands(context, cp, oplist, operands) {
                 }
 
                 if (oplist.argsize === 4) {
-                    value = "frame.locals["+addr+"]";
+                    value = "vm.frame.locals["+addr+"]";
                 }
                 else if (oplist.argsize === 2) {
-                    value = "frame.locals["+addr+"] & 0xffff";
+                    value = "vm.frame.locals["+addr+"] & 0xffff";
                 }
                 else {
-                    value = "frame.locals["+addr+"] & 0xff";
+                    value = "vm.frame.locals["+addr+"] & 0xff";
                 }
                 holdvar = alloc_holdvar(context, true);
                 context.code.push(holdvar+"=("+value+");");
@@ -3044,32 +3051,32 @@ function parse_operands(context, cp, oplist, operands) {
 
             switch (mode) {
             case 15: /* main memory RAM, four-byte address */
-                addr = memmap.read4(cp) + ramstart;
+                addr = _xxx_vm.memmap.read4(cp) + ramstart;
                 cp += 4;
                 break;
 
             case 14: /* main memory RAM, two-byte address */
-                addr = memmap.read2(cp) + ramstart;
+                addr = _xxx_vm.memmap.read2(cp) + ramstart;
                 cp += 2;
                 break;
 
             case 13: /* main memory RAM, one-byte address */
-                addr = memmap.read1(cp) + ramstart;
+                addr = _xxx_vm.memmap.read1(cp) + ramstart;
                 cp++;
                 break;
 
             case 7: /* main memory, four-byte address */
-                addr = memmap.read4(cp);
+                addr = _xxx_vm.memmap.read4(cp);
                 cp += 4;
                 break;
 
             case 6: /* main memory, two-byte address */
-                addr = memmap.read2(cp);
+                addr = _xxx_vm.memmap.read2(cp);
                 cp += 2;
                 break;
 
             case 5: /* main memory, one-byte address */
-                addr = memmap.read1(cp);
+                addr = _xxx_vm.memmap.read1(cp);
                 cp++;
                 break;
 
@@ -3079,13 +3086,13 @@ function parse_operands(context, cp, oplist, operands) {
 
             /* The main-memory cases. */
             if (oplist.argsize === 4) {
-                value = "memmap.read4("+addr+")";
+                value = "vm.memmap.read4("+addr+")";
             }
             else if (oplist.argsize === 2) {
-                value = "memmap.read2("+addr+")";
+                value = "vm.memmap.read2("+addr+")";
             }
             else {
-                value = "memmap.read1("+addr+")";
+                value = "vm.memmap.read1("+addr+")";
             }
             operands[ix] = value;
             continue;
@@ -3108,15 +3115,15 @@ function parse_operands(context, cp, oplist, operands) {
 
             if (mode >= 9 && mode <= 11) {
                 if (mode === 9) {
-                    addr = memmap.read1(cp);
+                    addr = _xxx_vm.memmap.read1(cp);
                     cp++;
                 }
                 else if (mode === 10) {
-                    addr = memmap.read2(cp);
+                    addr = _xxx_vm.memmap.read2(cp);
                     cp += 2;
                 }
                 else if (mode === 11) {
-                    addr = memmap.read4(cp);
+                    addr = _xxx_vm.memmap.read4(cp);
                     cp += 4;
                 }
 
@@ -3128,43 +3135,43 @@ function parse_operands(context, cp, oplist, operands) {
                 }
                 else if (oplist.argsize === 2) {
                     store_offloc_value(context, addr, undefined);
-                    operands[ix] = "frame.locals["+addr+"]=(0xffff &";
+                    operands[ix] = "vm.frame.locals["+addr+"]=(0xffff &";
                 }
                 else {
                     store_offloc_value(context, addr, undefined);
-                    operands[ix] = "frame.locals["+addr+"]=(0xff &";
+                    operands[ix] = "vm.frame.locals["+addr+"]=(0xff &";
                 }
                 continue;
             }
 
             switch (mode) {
             case 15: /* main memory RAM, four-byte address */
-                addr = memmap.read4(cp) + ramstart;
+                addr = _xxx_vm.memmap.read4(cp) + ramstart;
                 cp += 4;
                 break;
 
             case 14: /* main memory RAM, two-byte address */
-                addr = memmap.read2(cp) + ramstart;
+                addr = _xxx_vm.memmap.read2(cp) + ramstart;
                 cp += 2;
                 break;
 
             case 13: /* main memory RAM, one-byte address */
-                addr = memmap.read1(cp) + ramstart;
+                addr = _xxx_vm.memmap.read1(cp) + ramstart;
                 cp++;
                 break;
 
             case 7: /* main memory, four-byte address */
-                addr = memmap.read4(cp);
+                addr = _xxx_vm.memmap.read4(cp);
                 cp += 4;
                 break;
 
             case 6: /* main memory, two-byte address */
-                addr = memmap.read2(cp);
+                addr = _xxx_vm.memmap.read2(cp);
                 cp += 2;
                 break;
 
             case 5: /* main memory, one-byte address */
-                addr = memmap.read1(cp);
+                addr = _xxx_vm.memmap.read1(cp);
                 cp++;
                 break;
 
@@ -3174,13 +3181,13 @@ function parse_operands(context, cp, oplist, operands) {
 
             /* The main-memory cases. */
             if (oplist.argsize === 4) {
-                value = "memmap.write4("+addr+",";
+                value = "vm.memmap.write4("+addr+",";
             }
             else if (oplist.argsize === 2) {
-                value = "memmap.write2("+addr+",";
+                value = "vm.memmap.write2("+addr+",";
             }
             else {
-                value = "memmap.write1("+addr+",";
+                value = "vm.memmap.write1("+addr+",";
             }
             operands[ix] = value;
             continue;
@@ -3205,15 +3212,15 @@ function parse_operands(context, cp, oplist, operands) {
 
             if (mode >= 9 && mode <= 11) {
                 if (mode === 9) {
-                    addr = memmap.read1(cp);
+                    addr = _xxx_vm.memmap.read1(cp);
                     cp++;
                 }
                 else if (mode === 10) {
-                    addr = memmap.read2(cp);
+                    addr = _xxx_vm.memmap.read2(cp);
                     cp += 2;
                 }
                 else if (mode === 11) {
-                    addr = memmap.read4(cp);
+                    addr = _xxx_vm.memmap.read4(cp);
                     cp += 4;
                 }
 
@@ -3227,32 +3234,32 @@ function parse_operands(context, cp, oplist, operands) {
 
             switch (mode) {
             case 15: /* main memory RAM, four-byte address */
-                addr = memmap.read4(cp) + ramstart;
+                addr = _xxx_vm.memmap.read4(cp) + ramstart;
                 cp += 4;
                 break;
 
             case 14: /* main memory RAM, two-byte address */
-                addr = memmap.read2(cp) + ramstart;
+                addr = _xxx_vm.memmap.read2(cp) + ramstart;
                 cp += 2;
                 break;
 
             case 13: /* main memory RAM, one-byte address */
-                addr = memmap.read1(cp) + ramstart;
+                addr = _xxx_vm.memmap.read1(cp) + ramstart;
                 cp++;
                 break;
 
             case 7: /* main memory, four-byte address */
-                addr = memmap.read4(cp);
+                addr = _xxx_vm.memmap.read4(cp);
                 cp += 4;
                 break;
 
             case 6: /* main memory, two-byte address */
-                addr = memmap.read2(cp);
+                addr = _xxx_vm.memmap.read2(cp);
                 cp += 2;
                 break;
 
             case 5: /* main memory, one-byte address */
-                addr = memmap.read1(cp);
+                addr = _xxx_vm.memmap.read1(cp);
                 cp++;
                 break;
 
@@ -3281,15 +3288,15 @@ function parse_operands(context, cp, oplist, operands) {
 
             if (mode >= 9 && mode <= 11) {
                 if (mode === 9) {
-                    addr = memmap.read1(cp);
+                    addr = _xxx_vm.memmap.read1(cp);
                     cp++;
                 }
                 else if (mode === 10) {
-                    addr = memmap.read2(cp);
+                    addr = _xxx_vm.memmap.read2(cp);
                     cp += 2;
                 }
                 else if (mode === 11) {
-                    addr = memmap.read4(cp);
+                    addr = _xxx_vm.memmap.read4(cp);
                     cp += 4;
                 }
 
@@ -3300,32 +3307,32 @@ function parse_operands(context, cp, oplist, operands) {
 
             switch (mode) {
             case 15: /* main memory RAM, four-byte address */
-                addr = memmap.read4(cp) + ramstart;
+                addr = _xxx_vm.memmap.read4(cp) + ramstart;
                 cp += 4;
                 break;
 
             case 14: /* main memory RAM, two-byte address */
-                addr = memmap.read2(cp) + ramstart;
+                addr = _xxx_vm.memmap.read2(cp) + ramstart;
                 cp += 2;
                 break;
 
             case 13: /* main memory RAM, one-byte address */
-                addr = memmap.read1(cp) + ramstart;
+                addr = _xxx_vm.memmap.read1(cp) + ramstart;
                 cp++;
                 break;
 
             case 7: /* main memory, four-byte address */
-                addr = memmap.read4(cp);
+                addr = _xxx_vm.memmap.read4(cp);
                 cp += 4;
                 break;
 
             case 6: /* main memory, two-byte address */
-                addr = memmap.read2(cp);
+                addr = _xxx_vm.memmap.read2(cp);
                 cp += 2;
                 break;
 
             case 5: /* main memory, one-byte address */
-                addr = memmap.read1(cp);
+                addr = _xxx_vm.memmap.read1(cp);
                 cp++;
                 break;
 
@@ -3351,7 +3358,7 @@ function compile_func(funcaddr) {
     var addr = funcaddr;
 
     /* Check the Glulx type identifier byte. */
-    var functype = memmap.read1(addr);
+    var functype = _xxx_vm.memmap.read1(addr);
     if (functype !== 0xC0 && functype !== 0xC1) {
         if (functype >= 0xC0 && functype <= 0xDF)
             fatal_error("Call to unknown type of function.", addr);
@@ -3368,9 +3375,9 @@ function compile_func(funcaddr) {
     while (1) {
         /* Grab two bytes from the locals-format list. These are
            unsigned (0..255 range). */
-        var loctype = memmap.read1(addr);
+        var loctype = _xxx_vm.memmap.read1(addr);
         addr++;
-        var locnum = memmap.read1(addr);
+        var locnum = _xxx_vm.memmap.read1(addr);
         addr++;
 
         if (loctype === 0) {
@@ -3388,7 +3395,7 @@ function compile_func(funcaddr) {
        padded with extra zeroes to a four-byte boundary. */
     var rawsize = addr - rawstart;
     var rawpadding = 4 - (rawsize % 4 || 4);
-    var rawformat = memmap.slice(rawstart, addr + rawpadding);
+    var rawformat = _xxx_vm.memmap.slice(rawstart, addr + rawpadding);
 
     return new VMFunc(funcaddr, addr, localsformat, rawformat);
 }
@@ -3468,7 +3475,7 @@ function compile_path(vmfunc, startaddr, startiosys) {
 
         /* Fetch the opcode number. */
         opcodecp = cp;
-        opcode = memmap.read1(cp);
+        opcode = _xxx_vm.memmap.read1(cp);
         if (opcode === undefined)
             fatal_error("Tried to compile nonexistent address", cp);
         cp++;
@@ -3478,17 +3485,17 @@ function compile_path(vmfunc, startaddr, startiosys) {
             if (opcode & 0x40) {
                 /* Four-byte opcode */
                 opcode &= 0x3F;
-                opcode = (opcode * 0x100) | memmap.read1(cp);
+                opcode = (opcode * 0x100) | _xxx_vm.memmap.read1(cp);
                 cp++;
-                opcode = (opcode * 0x100) | memmap.read1(cp);
+                opcode = (opcode * 0x100) | _xxx_vm.memmap.read1(cp);
                 cp++;
-                opcode = (opcode * 0x100) | memmap.read1(cp);
+                opcode = (opcode * 0x100) | _xxx_vm.memmap.read1(cp);
                 cp++;
             }
             else {
                 /* Two-byte opcode */
                 opcode &= 0x7F;
-                opcode = (opcode * 0x100) | memmap.read1(cp);
+                opcode = (opcode * 0x100) | _xxx_vm.memmap.read1(cp);
                 cp++;
             }
         }
@@ -3528,7 +3535,7 @@ function compile_path(vmfunc, startaddr, startiosys) {
            address. If so, no need to compile further. */
         if (vmfunc.pathaddrs[cp] && !context.path_ends) {
             ;;;context.code.push("// reached jump-in point"); //debug
-            context.code.push("pc="+cp+";");
+            context.code.push("vm.pc="+cp+";");
             oputil_unload_offstate(context);
             context.code.push("return;");
             context.path_ends = true;
@@ -3584,7 +3591,7 @@ VM.prototype.enter_function = function(addr, args) {
             vmfunc_table[addr] = vmfunc;
     }
 
-    pc = vmfunc.startpc;
+    this.pc = vmfunc.startpc;
 
     var frame = new StackFrame(vmfunc);
     frame.depth = stack.length;
@@ -3630,40 +3637,40 @@ VM.prototype.enter_function = function(addr, args) {
 var ReturnedFromMain = { dummy: 'The top-level function has returned.' };
 
 /* Pop the current call frame off the stack. This is very simple. */
-function leave_function() {
-    var olddepth = frame.depth;
+VM.prototype.leave_function = function() {
+    var olddepth = this.frame.depth;
 
     stack.pop();
     if (stack.length === 0) {
-        frame = null;
+        this.frame = null;
         throw ReturnedFromMain;
     }
-    frame = stack[stack.length-1];
+    this.frame = stack[stack.length-1];
 
-    if (frame.depth !== olddepth-1)
+    if (this.frame.depth !== olddepth-1)
         fatal_error("Stack inconsistent after function exit.");
-}
+};
 
 /* Pop the stack down until it has length val. Used in the throw opcode. */
-function pop_stack_to(val) {
+VM.prototype.pop_stack_to = function(val) {
     /* Down to the correct frame, if necessary. */
     while (stack.length && stack[stack.length-1].framestart > val)
         stack.pop();
     if (stack.length === 0)
         fatal_error("Stack evaporated during throw.");
-    frame = stack[stack.length-1];
+    this.frame = stack[stack.length-1];
 
-    val -= (frame.framestart+frame.framelen);
+    val -= (this.frame.framestart+this.frame.framelen);
     if (val < 0)
         fatal_error("Attempted to throw below the frame value stack.");
     if (val & 3)
         fatal_error("Attempted to throw to an unaligned address.");
     val >>>= 2;
-    if (val > frame.valstack.length)
+    if (val > this.frame.valstack.length)
         fatal_error("Attempted to throw beyond the frame value stack.");
     /* Down to the correct position in the valstack. */
-    frame.valstack.length = val;
-}
+    this.frame.valstack.length = val;
+};
 
 /* Pop a callstub off the stack, and store a value at the appropriate
    location. (When returning from a function, for example, the value is
@@ -3678,25 +3685,25 @@ VM.prototype.pop_callstub = function(val) {
     if (isNaN(val))
         fatal_error("Function returned undefined value.");
 
-    var framestart = frame.valstack.pop();
-    if (framestart !== frame.framestart)
+    var framestart = this.frame.valstack.pop();
+    if (framestart !== this.frame.framestart)
         fatal_error("Call stub frameptr (" + framestart + ") " +
-            "does not match frame (" + frame.framestart + ")");
-    pc = frame.valstack.pop();
-    destaddr = frame.valstack.pop();
-    desttype = frame.valstack.pop();
+            "does not match frame (" + this.frame.framestart + ")");
+    this.pc = this.frame.valstack.pop();
+    destaddr = this.frame.valstack.pop();
+    desttype = this.frame.valstack.pop();
 
     switch (desttype) {
     case 0:
         return;
     case 1:
-        memmap.write4(destaddr, val);
+        this.memmap.write4(destaddr, val);
         return;
     case 2:
-        frame.locals[destaddr] = val;
+        this.frame.locals[destaddr] = val;
         return;
     case 3:
-        frame.valstack.push(val);
+        this.frame.valstack.push(val);
         return;
 
     case 0x11:
@@ -3706,25 +3713,25 @@ VM.prototype.pop_callstub = function(val) {
     case 0x10:
         /* This call stub was pushed during a string-decoding operation!
            We have to restart it. (Note that the return value is discarded.) */
-        vm.stream_string(0, pc, 0xE1, destaddr);
+        this.stream_string(0, this.pc, 0xE1, destaddr);
         return;
 
     case 0x12:
         /* This call stub was pushed during a number-printing operation.
            Restart that. (Return value discarded.) */
-        stream_num(0, pc, true, destaddr);
+        this.stream_num(0, this.pc, true, destaddr);
         return;
 
     case 0x13:
         /* This call stub was pushed during a C-string printing operation.
            We have to restart it. (Note that the return value is discarded.) */
-        vm.stream_string(0, pc, 0xE0, destaddr);
+        this.stream_string(0, this.pc, 0xE0, destaddr);
         return;
 
     case 0x14:
         /* This call stub was pushed during a Unicode printing operation.
            We have to restart it. (Note that the return value is discarded.) */
-        vm.stream_string(0, pc, 0xE2, destaddr);
+        this.stream_string(0, this.pc, 0xE2, destaddr);
         return;
 
     default:
@@ -3735,35 +3742,35 @@ VM.prototype.pop_callstub = function(val) {
 /* Do the value-storing part of an already-popped call stub. (This is a
    subset of the pop_callstub() work.)
 */
-function store_operand(desttype, destaddr, val) {
+VM.prototype.store_operand = function(desttype, destaddr, val) {
     switch (desttype) {
     case 0:
         return;
     case 1:
-        memmap.write4(destaddr, val);
+        this.memmap.write4(destaddr, val);
         return;
     case 2:
-        frame.locals[destaddr] = val;
+        vm.frame.locals[destaddr] = val;
         return;
     case 3:
-        frame.valstack.push(val);
+        vm.frame.valstack.push(val);
         return;
     default:
         fatal_error("Unrecognized desttype in callstub.", desttype);
     }
-}
+};
 
 /* Do the value-storing work for a funcop. A null funcop is equivalent
    to mode 0 "discard".
 */
-function store_operand_by_funcop(funcop, val) {
+VM.prototype.store_operand_by_funcop = function(funcop, val) {
     if (!funcop)
         return;
 
     switch (funcop.mode) {
 
     case 8: /* push on stack */
-        frame.valstack.push(val);
+        this.frame.valstack.push(val);
         return;
 
     case 0: /* discard value */
@@ -3771,25 +3778,25 @@ function store_operand_by_funcop(funcop, val) {
 
     case 11: /* The local-variable cases. */
         if (funcop.argsize === 4) {
-            frame.locals[funcop.addr] = (val);
+            this.frame.locals[funcop.addr] = (val);
         }
         else if (funcop.argsize === 2) {
-            frame.locals[funcop.addr] = (0xffff & val);
+            this.frame.locals[funcop.addr] = (0xffff & val);
         }
         else {
-            frame.locals[funcop.addr] = (0xff & val);
+            this.frame.locals[funcop.addr] = (0xff & val);
         }
         return;
 
     case 15: /* The main-memory cases. */
         if (funcop.argsize === 4) {
-            memmap.write4(funcop.addr, val);
+            this.memmap.write4(funcop.addr, val);
         }
         else if (funcop.argsize === 2) {
-            memmap.write2(funcop.addr, val);
+            this.memmap.write2(funcop.addr, val);
         }
         else {
-            memmap.write1(funcop.addr, val);
+            this.memmap.write1(funcop.addr, val);
         }
         return;
 
@@ -3797,7 +3804,7 @@ function store_operand_by_funcop(funcop, val) {
         fatal_error("Unknown addressing mode in store func by operand.");
 
     }
-}
+};
 
 /* Set the VM's random-number function to either a "true" RNG (Javascript's
    Math.random), or a seeded deterministic RNG.
@@ -3871,10 +3878,10 @@ var accel_func_map = {
         var addr = argv[0];
         if (addr < 36)
             return 0;
-        if (addr >= endmem)
+        if (addr >= _xxx_vm.endmem)
             return 0;
 
-        var tb = memmap.read1(addr);
+        var tb = _xxx_vm.memmap.read1(addr);
         if (tb >= 0xE0) {
             return 3;
         }
@@ -3897,11 +3904,11 @@ var accel_func_map = {
             return 0;
         }
 
-        var otab = memmap.read4(obj + 16);
+        var otab = _xxx_vm.memmap.read4(obj + 16);
         if (!otab)
             return 0;
 
-        var max = memmap.read4(otab);
+        var max = _xxx_vm.memmap.read4(otab);
         otab += 4;
         /* @binarysearch id 2 otab 10 max 0 0 res; */
         return binary_search(id, 2, otab, 10, max, 0, 0);
@@ -3915,7 +3922,7 @@ var accel_func_map = {
         if (prop === 0)
             return 0;
 
-        return memmap.read4(prop + 4);
+        return _xxx_vm.memmap.read4(prop + 4);
     },
 
     4: function func_4_rl__pr(argc, argv) {
@@ -3926,7 +3933,7 @@ var accel_func_map = {
         if (prop === 0)
             return 0;
 
-        return 4 * memmap.read2(prop + 2);
+        return 4 * _xxx_vm.memmap.read2(prop + 2);
     },
 
     5: function func_5_oc__cl(argc, argv) {
@@ -3982,13 +3989,13 @@ var accel_func_map = {
         if (prop === 0)
            return 0;
 
-        inlist = memmap.read4(prop + 4);
+        inlist = _xxx_vm.memmap.read4(prop + 4);
         if (inlist === 0)
            return 0;
 
-        inlistlen = memmap.read2(prop + 2);
+        inlistlen = _xxx_vm.memmap.read2(prop + 2);
         for (jx = 0; jx < inlistlen; jx++) {
-            if (memmap.read4(inlist + (4 * jx)) === cla)
+            if (_xxx_vm.memmap.read4(inlist + (4 * jx)) === cla)
                 return 1;
         }
         return 0;
@@ -4004,15 +4011,15 @@ var accel_func_map = {
         if (addr === 0) {
             /* id > 0 && id < indiv_prop_start */
             if ((id > 0) && (id < accel_params[1])) {
-                /* memmap.read4(cpv__start + 4*id) */
-                return memmap.read4(accel_params[8] + (4 * id));
+                /* _xxx_vm.memmap.read4(cpv__start + 4*id) */
+                return _xxx_vm.memmap.read4(accel_params[8] + (4 * id));
             }
 
             Glk.glk_put_jstring("\n[** Programming error: tried to read (something) **]\n");
             return 0;
         }
 
-        return memmap.read4(addr);
+        return _xxx_vm.memmap.read4(addr);
     },
 
     7: function func_7_op__pr(argc, argv) {
@@ -4058,12 +4065,12 @@ var accel_func_map = {
             return 0;
         }
 
-        /*  otab = memmap.read4(obj + 4*(3+(int)(num_attr_bytes/4))); */
-        var otab = memmap.read4(obj + 4*(3+(accel_params[7]>>2)));
+        /*  otab = _xxx_vm.memmap.read4(obj + 4*(3+(int)(num_attr_bytes/4))); */
+        var otab = _xxx_vm.memmap.read4(obj + 4*(3+(accel_params[7]>>2)));
         if (!otab)
             return 0;
 
-        var max = memmap.read4(otab);
+        var max = _xxx_vm.memmap.read4(otab);
         otab += 4;
         /* @binarysearch id 2 otab 10 max 0 0 res; */
         return binary_search(id, 2, otab, 10, max, 0, 0);
@@ -4077,7 +4084,7 @@ var accel_func_map = {
         if (prop === 0)
             return 0;
 
-        return memmap.read4(prop + 4);
+        return _xxx_vm.memmap.read4(prop + 4);
     },
 
     10: function func_10_rl__pr(argc, argv) {
@@ -4088,7 +4095,7 @@ var accel_func_map = {
         if (prop === 0)
             return 0;
 
-        return 4 * memmap.read2(prop + 2);
+        return 4 * _xxx_vm.memmap.read2(prop + 2);
     },
 
     11: function func_11_oc__cl(argc, argv) {
@@ -4144,13 +4151,13 @@ var accel_func_map = {
         if (prop === 0)
            return 0;
 
-        inlist = memmap.read4(prop + 4);
+        inlist = _xxx_vm.memmap.read4(prop + 4);
         if (inlist === 0)
            return 0;
 
-        inlistlen = memmap.read2(prop + 2);
+        inlistlen = _xxx_vm.memmap.read2(prop + 2);
         for (jx = 0; jx < inlistlen; jx++) {
-            if (memmap.read4(inlist + (4 * jx)) === cla)
+            if (_xxx_vm.memmap.read4(inlist + (4 * jx)) === cla)
                 return 1;
         }
         return 0;
@@ -4166,15 +4173,15 @@ var accel_func_map = {
         if (addr === 0) {
             /* id > 0 && id < indiv_prop_start */
             if ((id > 0) && (id < accel_params[1])) {
-                /* memmap.read4(cpv__start + 4*id) */
-                return memmap.read4(accel_params[8] + (4 * id));
+                /* _xxx_vm.memmap.read4(cpv__start + 4*id) */
+                return _xxx_vm.memmap.read4(accel_params[8] + (4 * id));
             }
 
             Glk.glk_put_jstring("\n[** Programming error: tried to read (something) **]\n");
             return 0;
         }
 
-        return memmap.read4(addr);
+        return _xxx_vm.memmap.read4(addr);
     },
 
     13: function func_13_op__pr(argc, argv) {
@@ -4217,8 +4224,8 @@ function accel_helper_obj_in_class(obj)
 {
     /* This checks whether obj is contained in Class, not whether
        it is a member of Class. */
-    /* (memmap.read4(obj + 13 + num_attr_bytes) === class_metaclass) */
-    return (memmap.read4(obj + 13 + accel_params[7]) === accel_params[2]);
+    /* (_xxx_vm.memmap.read4(obj + 13 + num_attr_bytes) === class_metaclass) */
+    return (_xxx_vm.memmap.read4(obj + 13 + accel_params[7]) === accel_params[2]);
 }
 
 /* Look up a property entry. */
@@ -4228,8 +4235,8 @@ function accel_helper_get_prop(obj, id)
     var prop;
 
     if (id & 0xFFFF0000) {
-        /* memmap.read4(classes_table+...) */
-        cla = memmap.read4(accel_params[0]+((id & 0xFFFF) * 4));
+        /* _xxx_vm.memmap.read4(classes_table+...) */
+        cla = _xxx_vm.memmap.read4(accel_params[0]+((id & 0xFFFF) * 4));
         accel_helper_temp_args[0] = obj;
         accel_helper_temp_args[1] = cla;
         /* func_5_oc__cl */
@@ -4253,9 +4260,9 @@ function accel_helper_get_prop(obj, id)
             return 0;
     }
 
-    /* memmap.read4(self) -- the global variable self */
-    if (memmap.read4(accel_params[6]) !== obj) {
-        if (memmap.read1(prop + 9) & 1)
+    /* _xxx_vm.memmap.read4(self) -- the global variable self */
+    if (_xxx_vm.memmap.read4(accel_params[6]) !== obj) {
+        if (_xxx_vm.memmap.read1(prop + 9) & 1)
             return 0;
     }
     return prop;
@@ -4271,8 +4278,8 @@ function accel_helper_get_prop_new(obj, id)
     var prop;
 
     if (id & 0xFFFF0000) {
-        /* memmap.read4(classes_table+...) */
-        cla = memmap.read4(accel_params[0]+((id & 0xFFFF) * 4));
+        /* _xxx_vm.memmap.read4(classes_table+...) */
+        cla = _xxx_vm.memmap.read4(accel_params[0]+((id & 0xFFFF) * 4));
         accel_helper_temp_args[0] = obj;
         accel_helper_temp_args[1] = cla;
         /* func_11_oc__cl */
@@ -4296,9 +4303,9 @@ function accel_helper_get_prop_new(obj, id)
             return 0;
     }
 
-    /* memmap.read4(self) -- the global variable self */
-    if (memmap.read4(accel_params[6]) !== obj) {
-        if (memmap.read1(prop + 9) & 1)
+    /* _xxx_vm.memmap.read4(self) -- the global variable self */
+    if (_xxx_vm.memmap.read4(accel_params[6]) !== obj) {
+        if (_xxx_vm.memmap.read1(prop + 9) & 1)
             return 0;
     }
     return prop;
@@ -4327,8 +4334,8 @@ function set_string_table(addr) {
         /* If the table is entirely in ROM, we can build a decoding tree.
            If not, leave it undefined in the VMTextEnv. */
         var dectab = undefined;
-        var tablelen = memmap.read4(stringtable);
-        var rootaddr = memmap.read4(stringtable+8);
+        var tablelen = _xxx_vm.memmap.read4(stringtable);
+        var rootaddr = _xxx_vm.memmap.read4(stringtable+8);
         var cache_stringtable = (stringtable+tablelen <= ramstart);
         if (cache_stringtable) {
             //qlog("building decoding table at " + stringtable.toString(16) + ", length " + tablelen.toString(16));
@@ -4399,7 +4406,7 @@ function build_decoding_tree(cablist, nodeaddr, depth, mask) {
     var ix, type, cab;
     var depthbit;
 
-    type = memmap.read1(nodeaddr);
+    type = _xxx_vm.memmap.read1(nodeaddr);
 
     if (type === 0 && depth === 4) { /*CACHEBITS*/
         /* Start a new array. */
@@ -4412,8 +4419,8 @@ function build_decoding_tree(cablist, nodeaddr, depth, mask) {
     }
 
     if (type === 0) {
-        var leftaddr  = memmap.read4(nodeaddr+1);
-        var rightaddr = memmap.read4(nodeaddr+5);
+        var leftaddr  = _xxx_vm.memmap.read4(nodeaddr+1);
+        var rightaddr = _xxx_vm.memmap.read4(nodeaddr+5);
         build_decoding_tree(cablist, leftaddr, depth+1, mask);
         build_decoding_tree(cablist, rightaddr, depth+1, (mask | (1 << depth)));
         return;
@@ -4427,11 +4434,11 @@ function build_decoding_tree(cablist, nodeaddr, depth, mask) {
     cab.depth = depth;
     switch (type) {
     case 0x02: /* 8-bit character */
-        cab.value = memmap.read1(nodeaddr);
+        cab.value = _xxx_vm.memmap.read1(nodeaddr);
         cab.cchar = CharToString(cab.value);
         break;
     case 0x04: /* Unicode character */
-        cab.value = memmap.read4(nodeaddr);
+        cab.value = _xxx_vm.memmap.read4(nodeaddr);
         cab.cchar = CharToString(cab.value);
         break;
     case 0x03: /* C-style string */
@@ -4442,7 +4449,7 @@ function build_decoding_tree(cablist, nodeaddr, depth, mask) {
         break;
     case 0x08: /* indirect ref */
     case 0x09: /* double-indirect ref */
-        cab.addr = memmap.read4(nodeaddr);
+        cab.addr = _xxx_vm.memmap.read4(nodeaddr);
         break;
     case 0x0A: /* indirect ref with arguments */
     case 0x0B: /* double-indirect ref with arguments */
@@ -4468,7 +4475,7 @@ function build_decoding_tree(cablist, nodeaddr, depth, mask) {
    re-enter (with inmiddle true) with some other iosysmode, so we handle
    all the cases.
 */
-function stream_num(nextcp, value, inmiddle, charnum) {
+VM.prototype.stream_num = function(nextcp, value, inmiddle, charnum) {
     var buf = (value & 0xffffffff).toString(10);
 
     //qlog("### stream_num(" + nextcp + ", " + buf + ", " + inmiddle + ", " + charnum + ") iosys " + iosysmode);
@@ -4483,7 +4490,7 @@ function stream_num(nextcp, value, inmiddle, charnum) {
     case 1: /* filter */
         if (!inmiddle) {
             // push_callstub(0x11, 0);
-            frame.valstack.push(0x11, 0, nextcp, frame.framestart);
+            this.frame.valstack.push(0x11, 0, nextcp, this.frame.framestart);
             inmiddle = true;
         }
         if (charnum < buf.length) {
@@ -4491,7 +4498,7 @@ function stream_num(nextcp, value, inmiddle, charnum) {
             /* Note that value is unsigned here -- only unsigned values
                go on the stack. */
             // push_callstub(0x12, charnum+1);
-            frame.valstack.push(0x12, charnum+1, value, frame.framestart);
+            this.frame.valstack.push(0x12, charnum+1, value, this.frame.framestart);
             enter_function(iosysrock, [ch]);
             return true;
         }
@@ -4504,15 +4511,15 @@ function stream_num(nextcp, value, inmiddle, charnum) {
     if (inmiddle) {
         var desttype, destaddr;
         /* String terminated. Carry out a pop_callstub_string(). */
-        if (frame.valstack.pop() !== frame.framestart)
+        if (this.frame.valstack.pop() !== this.frame.framestart)
             fatal_error("Call stub frameptr does not match frame.");
-        pc = frame.valstack.pop();
-        destaddr = frame.valstack.pop();
-        desttype = frame.valstack.pop();
+        this.pc = this.frame.valstack.pop();
+        destaddr = this.frame.valstack.pop();
+        desttype = this.frame.valstack.pop();
         if (desttype !== 0x11)
             fatal_error("String-on-string call stub while printing number.");
     }
-}
+};
 
 /* Look up a string, and print or execute it.
 
@@ -4578,11 +4585,11 @@ VM.prototype.stream_string = function(nextcp, addr, inmiddle, bitnum) {
         }
 
         /* String terminated. Carry out a pop_callstub_string(). */
-        if (frame.valstack.pop() !== frame.framestart)
+        if (this.frame.valstack.pop() !== this.frame.framestart)
             fatal_error("Call stub frameptr does not match frame.");
-        pc = frame.valstack.pop();
-        destaddr = frame.valstack.pop();
-        desttype = frame.valstack.pop();
+        this.pc = this.frame.valstack.pop();
+        destaddr = this.frame.valstack.pop();
+        desttype = this.frame.valstack.pop();
 
         if (desttype === 0x11) {
             /* The call stub for the top-level string. Return to the main
@@ -4595,7 +4602,7 @@ VM.prototype.stream_string = function(nextcp, addr, inmiddle, bitnum) {
             substring = true;
             bitnum = destaddr;
             inmiddle = 0xE1;
-            addr = pc;
+            addr = this.pc;
             //qlog("### end; pop to addr="+addr+"/"+inmiddle+"/"+bitnum);
         }
         else {
@@ -4637,7 +4644,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
     };
 
     if (inmiddle === 0) {
-        type = memmap.read1(addr);
+        type = _xxx_vm.memmap.read1(addr);
         if (type === 0xE2)
             addr+=4;
         else
@@ -4655,7 +4662,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
             var done = false;
 
             /* bitnum is already set right */
-            bits = memmap.read1(addr);
+            bits = _xxx_vm.memmap.read1(addr);
             if (bitnum)
                 bits >>= bitnum;
             numbits = (8 - bitnum);
@@ -4673,7 +4680,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
             while (!done) {
                 if (numbits < 4) { /* CACHEBITS */
                     /* readahead is certainly false */
-                    var newbyte = memmap.read1(addr+1);
+                    var newbyte = _xxx_vm.memmap.read1(addr+1);
                     bits |= (newbyte << numbits);
                     numbits += 8;
                     readahead = true;
@@ -4690,7 +4697,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         readahead = false;
                     }
                     else {
-                        var newbyte = memmap.read1(addr);
+                        var newbyte = _xxx_vm.memmap.read1(addr);
                         bits |= (newbyte << numbits);
                         numbits += 8;
                     }
@@ -4728,7 +4735,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     case 2: /* glk */
                         tmpaddr = cab.addr;
                         while (true) {
-                            ch = memmap.read1(tmpaddr);
+                            ch = _xxx_vm.memmap.read1(tmpaddr);
                             if (ch === 0)
                                 break;
                             context.buffer.push(CharToString(ch));
@@ -4750,7 +4757,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     case 2: /* glk */
                         tmpaddr = cab.addr;
                         while (true) {
-                            ch = memmap.read4(tmpaddr);
+                            ch = _xxx_vm.memmap.read4(tmpaddr);
                             if (ch === 0)
                                 break;
                             context.buffer.push(CharToString(ch));
@@ -4781,10 +4788,10 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     context.code.push("var otype, retval;");
                     context.code.push("var oaddr = "+(cab.addr)+";");
                     if (cab.type >= 0x09)
-                        context.code.push("oaddr = memmap.read4(oaddr);");
+                        context.code.push("oaddr = vm.memmap.read4(oaddr);");
                     if (cab.type === 0x0B)
-                        context.code.push("oaddr = memmap.read4(oaddr);");
-                    context.code.push("otype = memmap.read1(oaddr);");
+                        context.code.push("oaddr = vm.memmap.read4(oaddr);");
+                    context.code.push("otype = vm.memmap.read1(oaddr);");
                     retval = "retval";
                     done = true;
 
@@ -4793,13 +4800,13 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     context.code.push("retval = [oaddr, 0, 0];");
                     context.code.push("}");
                     context.code.push("else if (otype >= 0xC0 && otype <= 0xDF) {");
-                    var argc = 0;
+                    context.code.push("vm.enter_function(oaddr, [");
                     if (cab.type === 0x0A || cab.type === 0x0B) {
-                        argc = memmap.read4(cab.addr+4);
+                        var argc = _xxx_vm.memmap.read4(cab.addr+4);
                         for (var ix=0; ix<argc; ix++)
-                            context.code.push("tempcallargs["+ix+"]="+memmap.read4(cab.addr+8+4*ix)+";");
+                            context.code.push(_xxx_vm.memmap.read4(cab.addr+8+4*ix)+",");
                     }
-                    context.code.push("vm.enter_function(oaddr, "+argc+");");
+                    context.code.push("]);");
                     context.code.push("retval = true;");
                     context.code.push("}");
                     context.code.push("else {");
@@ -4819,24 +4826,24 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
             if (!stringtable)
                 fatal_error("Attempted to print a compressed string with no table set.");
             /* bitnum is already set right */
-            byt = memmap.read1(addr);
+            byt = _xxx_vm.memmap.read1(addr);
             if (bitnum)
                 byt >>= bitnum;
-            node = memmap.read4(stringtable+8);
+            node = _xxx_vm.memmap.read4(stringtable+8);
 
             while (!done) {
-                nodetype = memmap.read1(node);
+                nodetype = _xxx_vm.memmap.read1(node);
                 node++;
                 switch (nodetype) {
                 case 0x00: /* non-leaf node */
                     if (byt & 1)
-                        node = memmap.read4(node+4);
+                        node = _xxx_vm.memmap.read4(node+4);
                     else
-                        node = memmap.read4(node+0);
+                        node = _xxx_vm.memmap.read4(node+0);
                     if (bitnum === 7) {
                         bitnum = 0;
                         addr++;
-                        byt = memmap.read1(addr);
+                        byt = _xxx_vm.memmap.read1(addr);
                     }
                     else {
                         bitnum++;
@@ -4848,7 +4855,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     done = true;
                     break;
                 case 0x02: /* single character */
-                    ch = memmap.read1(node);
+                    ch = _xxx_vm.memmap.read1(node);
                     switch (curiosys) {
                     case 2: /* glk */
                         context.buffer.push(CharToString(ch));
@@ -4862,10 +4869,10 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         done = true;
                         break;
                     }
-                    node = memmap.read4(stringtable+8);
+                    node = _xxx_vm.memmap.read4(stringtable+8);
                     break;
                 case 0x04: /* single Unicode character */
-                    ch = memmap.read4(node);
+                    ch = _xxx_vm.memmap.read4(node);
                     switch (curiosys) {
                     case 2: /* glk */
                         context.buffer.push(CharToString(ch));
@@ -4879,13 +4886,13 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         done = true;
                         break;
                     }
-                    node = memmap.read4(stringtable+8);
+                    node = _xxx_vm.memmap.read4(stringtable+8);
                     break;
                 case 0x03: /* C string */
                     switch (curiosys) {
                     case 2: /* glk */
                         while (true) {
-                            ch = memmap.read1(node);
+                            ch = _xxx_vm.memmap.read1(node);
                             if (ch === 0)
                                 break;
                             context.buffer.push(CharToString(ch));
@@ -4900,13 +4907,13 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         done = true;
                         break;
                     }
-                    node = memmap.read4(stringtable+8);
+                    node = _xxx_vm.memmap.read4(stringtable+8);
                     break;
                 case 0x05: /* C Unicode string */
                     switch (curiosys) {
                     case 2: /* glk */
                         while (true) {
-                            ch = memmap.read4(node);
+                            ch = _xxx_vm.memmap.read4(node);
                             if (ch === 0)
                                 break;
                             context.buffer.push(CharToString(ch));
@@ -4921,7 +4928,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         done = true;
                         break;
                     }
-                    node = memmap.read4(stringtable+8);
+                    node = _xxx_vm.memmap.read4(stringtable+8);
                     break;
                 case 0x08:
                 case 0x09:
@@ -4935,10 +4942,10 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                        JIT code. But those aren't the common cases, so
                        let's not bother. */
                     context.code.push("var otype, retval;");
-                    context.code.push("var oaddr = "+memmap.read4(node)+";");
+                    context.code.push("var oaddr = "+_xxx_vm.memmap.read4(node)+";");
                     if (nodetype === 0x09 || nodetype === 0x0B)
-                        context.code.push("oaddr = memmap.read4(oaddr);");
-                    context.code.push("otype = memmap.read1(oaddr);");
+                        context.code.push("oaddr = vm.memmap.read4(oaddr);");
+                    context.code.push("otype = vm.memmap.read1(oaddr);");
                     retval = "retval";
                     done = true;
 
@@ -4947,13 +4954,13 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     context.code.push("retval = [oaddr, 0, 0];");
                     context.code.push("}");
                     context.code.push("else if (otype >= 0xC0 && otype <= 0xDF) {");
-                    context.code.push("var tempcallargs = [];");
+                    context.code.push("vm.enter_function(oaddr, [");
                     if (nodetype === 0x0A || nodetype === 0x0B) {
-                        var argc = memmap.read4(node+4);
+                        var argc = _xxx_vm.memmap.read4(node+4);
                         for (var ix=0; ix<argc; ix++)
-                            context.code.push("tempcallargs.push("+memmap.read4(node+8+4*ix)+");");
+                            context.code.push(_xxx_vm.memmap.read4(node+8+4*ix)+",");
                     }
-                    context.code.push("vm.enter_function(oaddr, tempcallargs);");
+                    context.code.push("]);");
                     context.code.push("retval = true;");
                     context.code.push("}");
                     context.code.push("else {");
@@ -4972,7 +4979,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
         switch (curiosys) {
         case 2: /* glk */
             while (1) {
-                ch = memmap.read1(addr);
+                ch = _xxx_vm.memmap.read1(addr);
                 addr++;
                 if (ch === 0)
                     break;
@@ -4982,7 +4989,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
         case 1: /* filter */
             oputil_flush_string(context);
             oputil_push_substring_callstub(context);
-            ch = memmap.read1(addr);
+            ch = _xxx_vm.memmap.read1(addr);
             addr++;
             if (ch !== 0) {
                 oputil_push_callstub(context, "0x13,0", addr);
@@ -5000,7 +5007,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
         switch (curiosys) {
         case 2: /* glk */
             while (1) {
-                ch = memmap.read4(addr);
+                ch = _xxx_vm.memmap.read4(addr);
                 addr+=4;
                 if (ch === 0)
                     break;
@@ -5010,7 +5017,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
         case 1: /* filter */
             oputil_flush_string(context);
             oputil_push_substring_callstub(context);
-            ch = memmap.read4(addr);
+            ch = _xxx_vm.memmap.read4(addr);
             addr+=4;
             if (ch !== 0) {
                 oputil_push_callstub(context, "0x14,0", addr);
@@ -5112,7 +5119,7 @@ function fetch_search_key(addr, len, options) {
         /* indirect key */
         var key = new Array(len);
         for (var ix=0; ix<len; ix++)
-            key[ix] = memmap.read1(addr+ix);
+            key[ix] = _xxx_vm.memmap.read1(addr+ix);
         return key;
     }
     else {
@@ -5148,7 +5155,7 @@ function linear_search(key, keysize, start,
     for (count=0; count<numstructs; count++, start+=structsize) {
         match = true;
         for (ix=0; match && ix<keysize; ix++) {
-            byt = memmap.read1(start + keyoffset + ix);
+            byt = _xxx_vm.memmap.read1(start + keyoffset + ix);
             if (byt !== keybuf[ix])
                 match = false;
         }
@@ -5163,7 +5170,7 @@ function linear_search(key, keysize, start,
         if (zeroterm) {
             match = true;
             for (ix=0; match && ix<keysize; ix++) {
-                byt = memmap.read1(start + keyoffset + ix);
+                byt = _xxx_vm.memmap.read1(start + keyoffset + ix);
                 if (byt !== 0)
                     match = false;
             }
@@ -5195,7 +5202,7 @@ function binary_search(key, keysize, start,
         val = (top+bot) >> 1;
         addr = start + val * structsize;
         for (ix=0; (!cmp) && ix<keysize; ix++) {
-            byt = memmap.read1(addr + keyoffset + ix);
+            byt = _xxx_vm.memmap.read1(addr + keyoffset + ix);
             byt2 = keybuf[ix];
             if (byt < byt2)
                 cmp = -1;
@@ -5234,7 +5241,7 @@ function linked_search(key, keysize, start,
     while (start !== 0) {
         match = true;
         for (ix=0; match && ix<keysize; ix++) {
-            byt = memmap.read1(start + keyoffset + ix);
+            byt = _xxx_vm.memmap.read1(start + keyoffset + ix);
             if (byt !== keybuf[ix])
                 match = false;
         }
@@ -5246,7 +5253,7 @@ function linked_search(key, keysize, start,
         if (zeroterm) {
             match = true;
             for (ix=0; match && ix<keysize; ix++) {
-                byt = memmap.read1(start + keyoffset + ix);
+                byt = _xxx_vm.memmap.read1(start + keyoffset + ix);
                 if (byt !== 0)
                     match = false;
             }
@@ -5256,7 +5263,7 @@ function linked_search(key, keysize, start,
             }
         }
 
-        start = memmap.read4(start + nextoffset);
+        start = _xxx_vm.memmap.read4(start + nextoffset);
     }
 
     return 0;
@@ -5390,9 +5397,9 @@ var opt_rethrow_exceptions = null;
 
 /* The VM state variables */
 
-var memmap; /* array of bytes */
+//var memmap;
 var stack; /* array of StackFrames */
-var frame; /* the top of the stack */
+//var frame;
 var vm_started = false; /* Quixe is initialized */
 var vm_stopped = false; /* Quixe has shut down */
 var done_executing; /* signals that we've quit *or* paused for interaction */
@@ -5415,9 +5422,9 @@ var origstringtable;
 var checksum;
 
 /* The VM registers. */
-var pc;
+//var pc;
 var stringtable;
-var endmem;        // always memmap.length
+//var endmem;
 var protectstart, protectend;
 var iosysmode, iosysrock;
 
@@ -5450,10 +5457,10 @@ VM.prototype.setup = function() {
     vm_started = true;
     resumefuncop = null;
     resumevalue = 0;
-    memmap = null;
+    this.memmap = null;
     this.stack = stack = [];
-    frame = null;
-    pc = 0;
+    this.frame = null;
+    this.pc = 0;
 
     if (game_image.length < 36)
         fatal_error("This is too short to be a valid Glulx file.");
@@ -5495,7 +5502,7 @@ VM.prototype.setup = function() {
     vmstring_table = undefined;
     set_random(0);
 
-    endmem = origendmem;
+    this.endmem = origendmem;
     stringtable = 0;
 
     undostack = [];
@@ -5520,17 +5527,17 @@ VM.prototype.restart = function() {
     var protect = copy_protected_range();
 
     /* Build (or rebuild) main memory array. */
-    memmap = null; // garbage-collect old memmap
-    memmap = new Memory(game_image).slice(0, endgamefile);
-    endmem = memmap.length;
-    change_memsize(origendmem, false);
+    this.memmap = null; // garbage-collect old memmap
+    this.memmap = new Memory(game_image).slice(0, endgamefile);
+    this.endmem = this.memmap.length;
+    this.change_memsize(origendmem, false);
     /* endmem is now origendmem */
 
     paste_protected_range(protect);
 
     this.stack = stack = [];
-    frame = null;
-    pc = 0;
+    this.frame = null;
+    this.pc = 0;
     iosysmode = 0;
     iosysrock = 0;
     set_string_table(origstringtable);
@@ -5645,7 +5652,7 @@ function unpack_iff_chunks(bytes) {
    on success.
 */
 function vm_save(streamid) {
-    ;;;if (memmap.length !== endmem) {
+    ;;;if (this.memmap.length !== this.endmem) {
     ;;;    fatal_error("Memory length was incorrect before save."); //assert
     ;;;}
 
@@ -5660,14 +5667,14 @@ function vm_save(streamid) {
 
     chunks.push({ key:"IFhd", chunk:game_image.slice(0, 128) });
 
-    var cmem = memmap.slice(ramstart);
+    var cmem = this.memmap.slice(ramstart);
     for (var i = ramstart; i < game_image.length; i++) {
         cmem[i - ramstart] ^= game_image[i];
     }
     cmem = compress_bytes(cmem);
     cmem.splice(0, 0, 0,0,0,0); // prepend four zeroes
     // Write in the endmem value
-    ByteWrite4(cmem, 0, endmem);
+    ByteWrite4(cmem, 0, this.endmem);
     chunks.push({key:"CMem", chunk:cmem});
 
     var stkschunk = [];
@@ -5761,29 +5768,29 @@ function vm_restore(streamid) {
     // The trailing zeroes may have been snipped; add them in.
     while (ram_xor.length < newendmem - ramstart)
         ram_xor.push(0);
-    change_memsize(newendmem, false);
-    memmap = game_image.slice(0, ramstart).concat(ram_xor);
+    this.change_memsize(newendmem, false);
+    this.memmap = game_image.slice(0, ramstart).concat(ram_xor);
     for (var i = ramstart; i < game_image.length; i++) {
-        memmap[i] ^= game_image[i];
+        this.memmap[i] ^= game_image[i];
     }
 
-    ;;;if (memmap.length !== endmem) {
+    ;;;if (this.memmap.length !== this.endmem) {
     ;;;    fatal_error("Memory length was incorrect after restore."); //assert
     ;;;}
 
     var stackchunk = chunks["Stks"];
     stack = [];
     while (stackchunk.length) {
-        frame = pop_deserialized_stackframe(stackchunk);
-        if (!frame) {
+        this.frame = pop_deserialized_stackframe(stackchunk);
+        if (!this.frame) {
             fatal_error("vm_restore failed: bad stack frame");
         }
-        stack.unshift(frame);
+        stack.unshift(this.frame);
     }
     for (var i = 0; i < stack.length; i++) {
         stack[i].depth = i;
     }
-    frame = stack[stack.length - 1];
+    this.frame = stack[stack.length - 1];
 
     var heapchunk = chunks["MAll"];
     if (heapchunk && heapchunk.length >= 8) {
@@ -5804,7 +5811,7 @@ function vm_restore(streamid) {
         for (var i = 0; i < usedlist.length; i++) {
             var addr = usedlist[i].addr;
             var size = usedlist[i].size;
-            if (addr < heapend || (addr + size) > endmem) {
+            if (addr < heapend || (addr + size) > this.endmem) {
                 fatal_error("vm_restore failed: corrupt dynamic heap");
             }
             if (addr > heapend) {
@@ -5812,8 +5819,8 @@ function vm_restore(streamid) {
             }
             heapend = addr + size;
         }
-        if (heapend < endmem) {
-            freelist.push(new HeapBlock(heapend, endmem - heapend));
+        if (heapend < this.endmem) {
+            freelist.push(new HeapBlock(heapend, this.endmem - heapend));
         }
     }
 
@@ -5827,14 +5834,14 @@ function vm_restore(streamid) {
    many on the stack, throw away the oldest.
 */
 function vm_saveundo() {
-    ;;;if (memmap.length !== endmem) {
+    ;;;if (this.memmap.length !== this.endmem) {
     ;;;    fatal_error("Memory length was incorrect before saveundo."); //assert
     ;;;}
 
     var snapshot = {};
-    snapshot.ram = memmap.slice(ramstart);
-    snapshot.endmem = endmem;
-    snapshot.pc = pc;
+    snapshot.ram = this.memmap.slice(ramstart);
+    snapshot.endmem = this.endmem;
+    snapshot.pc = this.pc;
     snapshot.stack = [];
     for (var i = 0; i < stack.length; i++) {
         snapshot.stack[i] = clone_stackframe(stack[i]);
@@ -5860,11 +5867,11 @@ function vm_restoreundo() {
     var snapshot = undostack.pop();
     var protect = copy_protected_range();
 
-    memmap = memmap.slice(0, ramstart).concat(snapshot.ram);
-    endmem = snapshot.endmem;
+    this.memmap = this.memmap.slice(0, ramstart).concat(snapshot.ram);
+    this.endmem = snapshot.endmem;
     stack = snapshot.stack;
-    frame = stack[stack.length - 1];
-    pc = snapshot.pc;
+    this.frame = stack[stack.length - 1];
+    this.pc = snapshot.pc;
 
     heapstart = snapshot.heapstart;
     usedlist = snapshot.usedlist;
@@ -5872,7 +5879,7 @@ function vm_restoreundo() {
 
     paste_protected_range(protect);
 
-    ;;;if (memmap.length !== endmem) {
+    ;;;if (this.memmap.length !== this.endmem) {
     ;;;    fatal_error("Memory length was incorrect after undo."); //assert
     ;;;}
     ;;;assert_heap_valid(); //assert
@@ -5883,10 +5890,10 @@ function vm_restoreundo() {
 /* Change the size of the memory map. The internal flag should be true
    only when the heap-allocation system is calling.
 */
-function change_memsize(newlen, internal) {
+VM.prototype.change_memsize = function(newlen, internal) {
     var lx;
 
-    if (newlen === endmem)
+    if (newlen === this.endmem)
         return;
 
     if ((!internal) && heap_is_active())
@@ -5896,15 +5903,15 @@ function change_memsize(newlen, internal) {
     if (newlen & 0xFF)
         fatal_error("Can only resize Glulx memory space to a 256-byte boundary.");
 
-    memmap.length = newlen;
-    if (newlen > endmem) {
-        for (lx=endmem; lx<newlen; lx++) {
-            memmap[lx] = 0;
+    this.memmap.length = newlen;
+    if (newlen > this.endmem) {
+        for (lx=this.endmem; lx<newlen; lx++) {
+            this.memmap[lx] = 0;
         }
     }
 
-    endmem = newlen;
-}
+    this.endmem = newlen;
+};
 
 /* Return an object which represents the protected-memory range and its
    contents. This can later be pasted back into the VM. If there is no
@@ -5923,7 +5930,7 @@ function copy_protected_range() {
         end: protectend,
         len: len
     };
-    var arr = memmap.slice(protectstart, protectend);
+    var arr = this.memmap.slice(protectstart, protectend);
 
     /* It is legal to protect a range that falls outside of memory; the
        extra bits are presumed to be zero. */
@@ -5944,11 +5951,11 @@ function paste_protected_range(obj) {
     var arr = obj.mem;
     var start = obj.start;
     var end = obj.end;
-    if (end > endmem)
-        end = endmem;
+    if (end > this.endmem)
+        end = this.endmem;
 
     for (ix=0, addr=start; addr<end; ix++, addr++) {
-        memmap[addr] = arr[ix];
+        this.memmap[addr] = arr[ix];
     }
 }
 
@@ -6049,7 +6056,7 @@ function heap_binary_search(list, addr) {
 
 function heap_malloc(size) {
     if (!heap_is_active()) {
-        heapstart = endmem;
+        heapstart = this.endmem;
     }
 
     for (var i = 0, max = freelist.length; i < max; i++) {
@@ -6068,9 +6075,9 @@ function heap_malloc(size) {
     }
 
     // No free block is big enough. Grow the heap.
-    var addr = endmem;
+    var addr = this.endmem;
     var rounded_up_size = ((size + 0xFF) & 0xFFFFFF00);
-    change_memsize(endmem + rounded_up_size, true);
+    change_memsize(this.endmem + rounded_up_size, true);
     if (rounded_up_size > size) {
         freelist.push(new HeapBlock(addr + size, rounded_up_size - size));
     }
@@ -6153,7 +6160,7 @@ function assert_heap_valid() {
         }
     }
 
-    if (addr !== endmem)
+    if (addr !== this.endmem)
         fatal_error("Heap inconsistency: overrun at end of heap");
 }
 
@@ -6339,7 +6346,7 @@ VM.prototype.execute_loop = function() {
 
     if (resumefuncop) {
         //qlog("### at resume time, storing value " + resumevalue + " at funcop " + resumefuncop.key);
-        store_operand_by_funcop(resumefuncop, resumevalue);
+        this.store_operand_by_funcop(resumefuncop, resumevalue);
         resumefuncop = null;
         resumevalue = 0;
     }
@@ -6348,16 +6355,16 @@ VM.prototype.execute_loop = function() {
 
 
     while (!done_executing) {
-        //qlog("### pc now " + pc.toString(16));
+        //qlog("### pc now " + this.pc.toString(16));
         vmfunc = this.current_frame().vmfunc;
         pathtab = vmfunc[iosysmode];
-        path = pathtab[pc];
+        path = pathtab[this.pc];
         if (path === undefined) {
-            vmfunc.pathaddrs[pc] = true;
-            path = compile_path(vmfunc, pc, iosysmode);
+            vmfunc.pathaddrs[this.pc] = true;
+            path = compile_path(vmfunc, this.pc, iosysmode);
             paths_compiled++; //###stats
-            if (pc < ramstart) {
-                pathtab[pc] = path;
+            if (this.pc < ramstart) {
+                pathtab[this.pc] = path;
                 paths_cached++; //###stats
             }
         }
