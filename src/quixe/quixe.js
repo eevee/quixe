@@ -64,8 +64,11 @@ Quixe = function() {
    can fall back to regular arrays of integers, without having to sprinkle
    checks throughout the codebase.
 */
+var Memory;
 if (window.ArrayBuffer) {
-    // Memory implementation with typed arrays
+    // Memory implementation with typed arrays.
+    // Note that this doesn't use DataView because it is, shockingly, slower
+    // than just writing the math in JS!
     Memory = function(bytes) {
         this._buffer = new ArrayBuffer(bytes.length);
         this._u8 = new Uint8Array(this._buffer);
@@ -75,7 +78,10 @@ if (window.ArrayBuffer) {
     };
     // Array interface
     Memory.prototype.slice = function(start, end) {
-        return new Memory(this._u8.subarray(start, end));
+        return new Memory(this.raw_slice(start, end));
+    };
+    Memory.prototype.raw_slice = function(start, end) {
+        return this._u8.subarray(start, end);
     };
     // Byte access
     Memory.prototype.read1 = function(addr) {
@@ -111,7 +117,10 @@ else {
     };
     // Array interface
     Memory.prototype.slice = function(start, end) {
-        return new Memory(this.buffer.slice(start, end));
+        return new Memory(this.raw_slice(start, end));
+    };
+    Memory.prototype.raw_slice = function(start, end) {
+        return this.buffer.slice(start, end);
     };
     // Byte access
     Memory.prototype.read1 = function(addr) {
@@ -2211,17 +2220,17 @@ var opcode_table = {
 
 
     0x150: function(context, operands) { /* linearsearch */
-        var expr = "linear_search(("+operands[0]+"),("+operands[1]+"),("+operands[2]+"),("+operands[3]+"),("+operands[4]+"),("+operands[5]+"),("+operands[6]+"))";
+        var expr = "vm.linear_search(("+operands[0]+"),("+operands[1]+"),("+operands[2]+"),("+operands[3]+"),("+operands[4]+"),("+operands[5]+"),("+operands[6]+"))";
         context.code.push(operands[7]+expr+");");
     },
 
     0x151: function(context, operands) { /* binarysearch */
-        var expr = "binary_search(("+operands[0]+"),("+operands[1]+"),("+operands[2]+"),("+operands[3]+"),("+operands[4]+"),("+operands[5]+"),("+operands[6]+"))";
+        var expr = "vm.binary_search(("+operands[0]+"),("+operands[1]+"),("+operands[2]+"),("+operands[3]+"),("+operands[4]+"),("+operands[5]+"),("+operands[6]+"))";
         context.code.push(operands[7]+expr+");");
     },
 
     0x152: function(context, operands) { /* linkedsearch */
-        var expr = "linked_search(("+operands[0]+"),("+operands[1]+"),("+operands[2]+"),("+operands[3]+"),("+operands[4]+"),("+operands[5]+"))";
+        var expr = "vm.linked_search(("+operands[0]+"),("+operands[1]+"),("+operands[2]+"),("+operands[3]+"),("+operands[4]+"),("+operands[5]+"))";
         context.code.push(operands[6]+expr+");");
     },
 
@@ -3914,7 +3923,7 @@ var accel_func_map = {
         var max = _xxx_vm.memmap.read4(otab);
         otab += 4;
         /* @binarysearch id 2 otab 10 max 0 0 res; */
-        return binary_search(id, 2, otab, 10, max, 0, 0);
+        return _xxx_vm.binary_search(id, 2, otab, 10, max, 0, 0);
     },
 
     3: function func_3_ra__pr(argc, argv) {
@@ -4076,7 +4085,7 @@ var accel_func_map = {
         var max = _xxx_vm.memmap.read4(otab);
         otab += 4;
         /* @binarysearch id 2 otab 10 max 0 0 res; */
-        return binary_search(id, 2, otab, 10, max, 0, 0);
+        return _xxx_vm.binary_search(id, 2, otab, 10, max, 0, 0);
     },
 
     9: function func_9_ra__pr(argc, argv) {
@@ -5117,13 +5126,10 @@ function do_gestalt(val, val2) {
 /* This fetches a search key, and returns an array containing the key
    (bytewise).
 */
-function fetch_search_key(addr, len, options) {
+VM.prototype._fetch_search_key = function(addr, len, options) {
     if (options & 1) {
         /* indirect key */
-        var key = new Array(len);
-        for (var ix=0; ix<len; ix++)
-            key[ix] = _xxx_vm.memmap.read1(addr+ix);
-        return key;
+        return this.memmap.raw_slice(addr, addr + len);
     }
     else {
         switch (len) {
@@ -5145,21 +5151,21 @@ function fetch_search_key(addr, len, options) {
             throw('Direct search key must hold one, two, or four bytes.');
         }
     }
-}
+};
 
-function linear_search(key, keysize, start,
+VM.prototype.linear_search = function(key, keysize, start,
     structsize, numstructs, keyoffset, options) {
 
-    var ix, count, match, byt;
+    var ix, count, match, bytes;
     var retindex = ((options & 4) !== 0);
     var zeroterm = ((options & 2) !== 0);
-    var keybuf = fetch_search_key(key, keysize, options);
+    var keybuf = this._fetch_search_key(key, keysize, options);
 
     for (count=0; count<numstructs; count++, start+=structsize) {
         match = true;
+        bytes = this.memmap.raw_slice(start + keyoffset, start + keyoffset + keysize);
         for (ix=0; match && ix<keysize; ix++) {
-            byt = _xxx_vm.memmap.read1(start + keyoffset + ix);
-            if (byt !== keybuf[ix])
+            if (bytes[ix] !== keybuf[ix])
                 match = false;
         }
 
@@ -5173,8 +5179,7 @@ function linear_search(key, keysize, start,
         if (zeroterm) {
             match = true;
             for (ix=0; match && ix<keysize; ix++) {
-                byt = _xxx_vm.memmap.read1(start + keyoffset + ix);
-                if (byt !== 0)
+                if (bytes[ix] !== 0)
                     match = false;
             }
 
@@ -5188,15 +5193,15 @@ function linear_search(key, keysize, start,
         return 0xFFFFFFFF;
     else
         return 0;
-}
+};
 
-function binary_search(key, keysize, start,
+VM.prototype.binary_search = function(key, keysize, start,
     structsize, numstructs, keyoffset, options) {
 
     var top, bot, addr, val, cmp, ix;
     var byt, byt2;
     var retindex = ((options & 4) !== 0);
-    var keybuf = fetch_search_key(key, keysize, options);
+    var keybuf = this._fetch_search_key(key, keysize, options);
 
     bot = 0;
     top = numstructs;
@@ -5205,7 +5210,7 @@ function binary_search(key, keysize, start,
         val = (top+bot) >> 1;
         addr = start + val * structsize;
         for (ix=0; (!cmp) && ix<keysize; ix++) {
-            byt = _xxx_vm.memmap.read1(addr + keyoffset + ix);
+            byt = this.memmap.read1(addr + keyoffset + ix);
             byt2 = keybuf[ix];
             if (byt < byt2)
                 cmp = -1;
@@ -5232,20 +5237,20 @@ function binary_search(key, keysize, start,
         return 0xFFFFFFFF;
     else
         return 0;
-}
+};
 
-function linked_search(key, keysize, start,
+VM.prototype.linked_search = function(key, keysize, start,
     keyoffset, nextoffset, options) {
 
-    var ix, byt, match;
+    var ix, bytes, match;
     var zeroterm = ((options & 2) !== 0);
-    var keybuf = fetch_search_key(key, keysize, options);
+    var keybuf = this._fetch_search_key(key, keysize, options);
 
     while (start !== 0) {
         match = true;
+        bytes = this.memmap.raw_slice(start + keyoffset, start + keyoffset + keysize);
         for (ix=0; match && ix<keysize; ix++) {
-            byt = _xxx_vm.memmap.read1(start + keyoffset + ix);
-            if (byt !== keybuf[ix])
+            if (bytes[ix] !== keybuf[ix])
                 match = false;
         }
 
@@ -5256,8 +5261,7 @@ function linked_search(key, keysize, start,
         if (zeroterm) {
             match = true;
             for (ix=0; match && ix<keysize; ix++) {
-                byt = _xxx_vm.memmap.read1(start + keyoffset + ix);
-                if (byt !== 0)
+                if (bytes[ix] !== 0)
                     match = false;
             }
 
@@ -5266,11 +5270,11 @@ function linked_search(key, keysize, start,
             }
         }
 
-        start = _xxx_vm.memmap.read4(start + nextoffset);
+        start = this.memmap.read4(start + nextoffset);
     }
 
     return 0;
-}
+};
 
 /* Convert an integer (in IEEE-754 single-precision format) into a
    Javascript number.
@@ -6372,18 +6376,9 @@ VM.prototype.execute_loop = function() {
             }
         }
         total_path_calls++; //###stats
-        try {
-            path(this);
-        }
-        catch (ex) {
-            if (ex === ReturnedFromMain) {
-                done_executing = true;
-                vm_stopped = true;
-            }
-            else {
-                /* Some other exception. */
-                throw ex;
-            }
+        if (this._execute_step(path)) {
+            done_executing = true;
+            vm_stopped = true;
         }
     }
 
@@ -6399,6 +6394,22 @@ VM.prototype.execute_loop = function() {
     Glk.update();
 
     qlog("### done executing; path time = " + (pathend-pathstart) + " ms");
+};
+
+/* This is broken out because JavaScript VMs have a hard time with
+ * functions that do try/catch, and execute_loop is called a lot.
+ * Returns true if the VM should now exit normally. */
+VM.prototype._execute_step = function(path) {
+    try {
+        path(this);
+    }
+    catch (ex) {
+        if (ex === ReturnedFromMain) {
+            return true;
+        }
+        throw ex;
+    }
+    return false;
 };
 
 /* End of Quixe namespace function. Return the object which will
