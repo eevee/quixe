@@ -393,7 +393,7 @@ function convert_arg(arg, passin, val) {
     }
     if (arg instanceof ArgClass) {
         if (passin) {
-            return 'class_obj_from_id("'+arg.name+'", '+val+')';
+            return 'vm.dispatcher.class_obj_from_id("'+arg.name+'", '+val+')';
         }
         else {
             return 'null';
@@ -416,7 +416,7 @@ function unconvert_arg(arg, val) {
             return 'uncast_signed_char('+val+')'
     }
     if (arg instanceof ArgClass) {
-        return 'class_obj_to_id("'+arg.name+'", '+val+')';
+        return 'vm.dispatcher.class_obj_to_id("'+arg.name+'", '+val+')';
     }
     return '???';
 }
@@ -514,15 +514,15 @@ function build_function(func) {
             if ((refarg instanceof ArgInt)
                 || (refarg instanceof ArgChar)
                 || (refarg instanceof ArgClass)) {
-                out.push('  '+tmpvar+' = new Glk.RefBox();');
-                val = convert_arg(refarg, arg.passin, 'VM.ReadWord(callargs['+argpos+'])');
+                out.push('  '+tmpvar+' = new vm.glk.RefBox();');
+                val = convert_arg(refarg, arg.passin, 'vm.ReadWord(callargs['+argpos+'])');
                 out.push('  '+tmpvar+'.set_value('+val+');');
             }
             else if (refarg instanceof ArgStruct) {
                 subargs = refarg.form.args;
-                out.push('  '+tmpvar+' = new Glk.RefStruct('+subargs.length+');');
+                out.push('  '+tmpvar+' = new vm.glk.RefStruct('+subargs.length+');');
                 for (jx=0; jx<subargs.length; jx++) {
-                    val = convert_arg(subargs[jx], arg.passin, 'VM.ReadStructField(callargs['+argpos+'], '+jx+')');
+                    val = convert_arg(subargs[jx], arg.passin, 'vm.ReadStructField(callargs['+argpos+'], '+jx+')');
                     out.push('  '+tmpvar+'.push_field('+val+');');
                 }
             }
@@ -547,7 +547,7 @@ function build_function(func) {
                 locals['ix'] = true;
                 locals['jx'] = true;
                 out.push('  for (ix=0, jx=callargs['+argpos+']; ix<glklen; ix++, jx+='+refarg.refsize+') {');
-                val = convert_arg(refarg, true, 'VM.Read'+refarg.macro+'(jx)');
+                val = convert_arg(refarg, true, 'vm.Read'+refarg.macro+'(jx)');
                 out.push('    '+tmpvar+'[ix] = '+val+';');
                 out.push('  }');
             }
@@ -574,13 +574,13 @@ function build_function(func) {
             }
             out.push(tmpvar+' = Array();');
             out.push('jx = callargs['+argpos+'];');
-            out.push('if (VM.ReadByte(jx) != '+checkbyte+') throw("glk '+func.name+': string argument must be unencoded");');
+            out.push('if (vm.ReadByte(jx) != '+checkbyte+') throw("glk '+func.name+': string argument must be unencoded");');
             out.push('for (jx+='+arg.refsize+'; true; jx+='+arg.refsize+') {');
-            out.push('  ix = VM.Read'+arg.macro+'(jx);');
+            out.push('  ix = vm.Read'+arg.macro+'(jx);');
             out.push('  if (ix == 0) break;');
             out.push('  '+tmpvar+'.push(ix);');
             out.push('}');
-            out.push(tmpvar+' = Glk.'+confunc+'('+tmpvar+');');
+            out.push(tmpvar+' = vm.glk.'+confunc+'('+tmpvar+');');
             argpos += 1;
         }
         else {
@@ -599,12 +599,12 @@ function build_function(func) {
     else {
         retval = '';
     }
-    out.push(retval + 'Glk.glk_' + func.name + '(' + argjoin.join(', ') + ');');
+    out.push(retval + 'vm.glk.glk_' + func.name + '(' + argjoin.join(', ') + ');');
 
     if (mayblock) {
         /* If the call blocks, we need to stash away the arguments and
            then return early. */
-        out.push('if (glkret === Glk.DidNotReturn) {');
+        out.push('if (glkret === vm.glk.DidNotReturn) {');
         out.push('  set_blocked_selector(' + func.id + ', callargs);');
         out.push('  return glkret;');
         out.push('}');
@@ -630,13 +630,13 @@ function build_function(func) {
                     || (refarg instanceof ArgChar)
                     || (refarg instanceof ArgClass)) {
                     val = unconvert_arg(refarg, tmpvar+'.get_value()');
-                    out.push('  VM.WriteWord(callargs['+argpos+'], '+val+');');
+                    out.push('  vm.WriteWord(callargs['+argpos+'], '+val+');');
                 }
                 else if (refarg instanceof ArgStruct) {
                     subargs = refarg.form.args;
                     for (jx=0; jx<subargs.length; jx++) {
                         val = unconvert_arg(subargs[jx], tmpvar+'.get_field('+jx+')');
-                        out.push('  VM.WriteStructField(callargs['+argpos+'], '+jx+', '+val+');');
+                        out.push('  vm.WriteStructField(callargs['+argpos+'], '+jx+', '+val+');');
                     }
                 }
                 else {
@@ -654,7 +654,7 @@ function build_function(func) {
                 locals['jx'] = true;
                 out.push('  for (ix=0, jx=callargs['+argpos+']; ix<glklen; ix++, jx+='+refarg.refsize+') {');
                 val = unconvert_arg(refarg, tmpvar+'[ix]');
-                out.push('    VM.Write'+refarg.macro+'(jx, '+val+')');
+                out.push('    vm.Write'+refarg.macro+'(jx, '+val+')');
                 out.push('  }');
                 out.push('}');
             }
@@ -699,7 +699,7 @@ function build_function(func) {
        Note the parentheses, which make this a value rather than a function
        statement.
     */
-    return eval('(function _glkote__' + func.name + '(callargs) {\n' + val + '\n})');
+    return eval('(function _glkote__' + func.name + '(vm, callargs) {\n' + val + '\n})');
 }
 
 /* Cache of all the dispatch functions we've compiled. */

@@ -554,6 +554,10 @@ function make_code(addr, val, arg) {
 }
 
 function VM() {
+    // TODO the dependencies are a little tangled here!  everything relies on
+    // everything.  is there any way to fix that really
+    this.glk = Glk;
+    this.dispatcher = GiDispa;
 
     // TODO refs to globals
     this.stack = stack;  // TODO need to fix places that mutate me
@@ -567,6 +571,15 @@ VM.prototype.add_frame = function(frame_) {
 VM.prototype.current_frame = function() {
     return this.stack[this.stack.length - 1];
 };
+
+// TODO these are only exported for the sake of gi_dispa; please just rename them and move them down here once it no longer uses them
+VM.prototype.ReadByte = ReadArgByte;
+VM.prototype.WriteByte = WriteArgByte;
+VM.prototype.ReadWord = ReadArgWord;
+VM.prototype.WriteWord = WriteArgWord;
+VM.prototype.ReadStructField = ReadStructField;
+VM.prototype.WriteStructField = WriteStructField;
+VM.prototype.SetResumeStore = SetResumeStore;
 
 /* The VMFunc class: Everything we know about a function. This includes the
    layout of the local variables, the compiled paths for various start points
@@ -2602,7 +2615,7 @@ var opcode_table = {
             mayblock = Glk.call_may_not_return(Number(operands[0]));
         else
             mayblock = true;
-        context.code.push("tempglkargs.length = " + operands[1] + ";");
+        context.code.push("var tempglkargs = new Array(" + operands[1] + ");");
         if (quot_isconstant(operands[1])) {
             var ix;
             var argc = Number(operands[1]);
@@ -2627,7 +2640,7 @@ var opcode_table = {
            we just unloaded the offstack. The non-blocking case is a normal
            store. */
         context.varsused["glkret"] = true;
-        context.code.push("glkret = GiDispa.get_function("+operands[0]+")(tempglkargs);");
+        context.code.push("glkret = vm.dispatcher.get_function("+operands[0]+")(vm, tempglkargs);");
         if (mayblock) {
             context.code.push("if (glkret === Glk.DidNotReturn) {");
             context.code.push("  resumefuncop = "+oputil_record_funcop(operands[2])+";");
@@ -5397,7 +5410,6 @@ var frame; /* the top of the stack */
 var vm_started = false; /* Quixe is initialized */
 var vm_stopped = false; /* Quixe has shut down */
 var tempcallargs; /* only used momentarily, for enter_function() */
-var tempglkargs; /* only used momentarily, for the @glk opcode */
 var done_executing; /* signals that we've quit *or* paused for interaction */
 
 var vmfunc_table; /* maps addresses to VMFuncs */
@@ -5497,7 +5509,6 @@ VM.prototype.setup = function() {
     decoding_tree = undefined;
     vmstring_table = undefined;
     tempcallargs = Array(8);
-    tempglkargs = Array(1);
     set_random(0);
 
     endmem = origendmem;
