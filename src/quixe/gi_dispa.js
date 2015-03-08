@@ -696,9 +696,10 @@ function build_function(func) {
     /* This uses eval(), rather than Function(), because it needs to
        return a closure inside the GiDispa environment. (All the generated
        code assumes that it has the internal variables in scope.)
+       Note the parentheses, which make this a value rather than a function
+       statement.
     */
-    eval('function _func(callargs) {\n' + val + '\n}');
-    return _func;
+    return eval('(function _glkote__' + func.name + '(callargs) {\n' + val + '\n})');
 }
 
 /* Cache of all the dispatch functions we've compiled. */
