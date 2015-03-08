@@ -1553,6 +1553,7 @@ var opcode_table = {
     },
 
     0x30: function(context, operands) { /* call */
+        context.code.push("var tempcallargs = new Array("+operands[1]+");");
         if (quot_isconstant(operands[1])) {
             var ix;
             var argc = Number(operands[1]);
@@ -1573,12 +1574,13 @@ var opcode_table = {
             context.code.push("for (ix=0; ix<"+operands[1]+"; ix++) { tempcallargs[ix]=frame.valstack.pop(); }");
         }
         oputil_push_callstub(context, operands[2]);
-        context.code.push("vm.enter_function("+operands[0]+", "+operands[1]+");");
+        context.code.push("vm.enter_function("+operands[0]+", tempcallargs);");
         context.code.push("return;");
         context.path_ends = true;
     },
 
     0x34: function(context, operands) { /* tailcall */
+        context.code.push("var tempcallargs = new Array("+operands[1]+");");
         if (quot_isconstant(operands[1])) {
             var ix;
             var argc = Number(operands[1]);
@@ -1601,7 +1603,7 @@ var opcode_table = {
         /* Note that tailcall in the top-level function will not work.
            But why would you do that? */
         context.code.push("leave_function();");
-        context.code.push("vm.enter_function("+operands[0]+", "+operands[1]+");");
+        context.code.push("vm.enter_function("+operands[0]+", tempcallargs);");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -1609,37 +1611,31 @@ var opcode_table = {
     0x160: function(context, operands) { /* callf */
         oputil_unload_offstate(context);
         oputil_push_callstub(context, operands[1]);
-        context.code.push("vm.enter_function("+operands[0]+", 0);");
+        context.code.push("vm.enter_function("+operands[0]+", []);");
         context.code.push("return;");
         context.path_ends = true;
     },
 
     0x161: function(context, operands) { /* callfi */
         oputil_unload_offstate(context);
-        context.code.push("tempcallargs[0]=("+operands[1]+");");
         oputil_push_callstub(context, operands[2]);
-        context.code.push("vm.enter_function("+operands[0]+", 1);");
+        context.code.push("vm.enter_function("+operands[0]+", ["+operands[1]+"]);");
         context.code.push("return;");
         context.path_ends = true;
     },
 
     0x162: function(context, operands) { /* callfii */
         oputil_unload_offstate(context);
-        context.code.push("tempcallargs[0]=("+operands[1]+");");
-        context.code.push("tempcallargs[1]=("+operands[2]+");");
         oputil_push_callstub(context, operands[3]);
-        context.code.push("vm.enter_function("+operands[0]+", 2);");
+        context.code.push("vm.enter_function("+operands[0]+", ["+operands[1]+","+operands[2]+"]);");
         context.code.push("return;");
         context.path_ends = true;
     },
 
     0x163: function(context, operands) { /* callfiii */
         oputil_unload_offstate(context);
-        context.code.push("tempcallargs[0]=("+operands[1]+");");
-        context.code.push("tempcallargs[1]=("+operands[2]+");");
-        context.code.push("tempcallargs[2]=("+operands[3]+");");
         oputil_push_callstub(context, operands[4]);
-        context.code.push("vm.enter_function("+operands[0]+", 3);");
+        context.code.push("vm.enter_function("+operands[0]+", ["+operands[1]+","+operands[2]+","+operands[3]+"]);");
         context.code.push("return;");
         context.path_ends = true;
     },
@@ -2232,9 +2228,8 @@ var opcode_table = {
             break;
         case 1: /* filter */
             oputil_unload_offstate(context);
-            context.code.push("tempcallargs[0]=(("+operands[0]+")&0xff);");
             oputil_push_callstub(context, "0,0");
-            context.code.push("vm.enter_function(iosysrock, 1);");
+            context.code.push("vm.enter_function(iosysrock, [("+operands[0]+")&0xff]);");
             context.code.push("return;");
             context.path_ends = true;
             break;
@@ -2293,9 +2288,8 @@ var opcode_table = {
             break;
         case 1: /* filter */
             oputil_unload_offstate(context);
-            context.code.push("tempcallargs[0]=("+operands[0]+");");
             oputil_push_callstub(context, "0,0");
-            context.code.push("vm.enter_function(iosysrock, 1);");
+            context.code.push("vm.enter_function(iosysrock, ["+operands[0]+"]);");
             context.code.push("return;");
             context.path_ends = true;
             break;
@@ -3561,16 +3555,14 @@ function compile_path(vmfunc, startaddr, startiosys) {
     return make_code(vmfunc.funcaddr, context.code.join("\n"));
 }
 
-/* Prepare for execution of a new function. The argcount is the number
-   of arguments passed in; the arguments themselves are in the
-   tempcallargs array. (We don't rely on tempcallargs.length, as that
-   can be greater than argcount.)
+/* Prepare for execution of a new function.
 
    This puts a new call frame onto the stack, and fills in its locals
    (or valstack, for a 0xC0 function.) The pc is set to the function's
    starting address.
 */
-VM.prototype.enter_function = function(addr, argcount) {
+VM.prototype.enter_function = function(addr, args) {
+    var argc = args.length;
     var ix;
 
     total_function_calls++; //###stats
@@ -3580,7 +3572,7 @@ VM.prototype.enter_function = function(addr, argcount) {
     var accelfunc = accel_address_map[addr];
     if (accelfunc !== undefined) {
         accel_function_calls++; //###stats
-        var val = accelfunc(argcount, tempcallargs);
+        var val = accelfunc(args.length, args);
         this.pop_callstub(val);
         return;
     }
@@ -3608,25 +3600,25 @@ VM.prototype.enter_function = function(addr, argcount) {
     if (vmfunc.functype === 0xC0) {
         /* Push the function arguments on the stack. The locals have already
            been zeroed. */
-        for (ix=argcount-1; ix >= 0; ix--)
-            frame.valstack.push(tempcallargs[ix]);
-        frame.valstack.push(argcount);
+        for (ix=argc-1; ix >= 0; ix--)
+            frame.valstack.push(args[ix]);
+        frame.valstack.push(argc);
     }
     else {
         /* Copy in function arguments. This is a bit gross, since we have to
            follow the locals format. If there are fewer arguments than locals,
            that's fine -- we've already zeroed out this space. If there are
            more arguments than locals, the extras are silently dropped. */
-        for (ix=0; ix<argcount; ix++) {
+        for (ix=0; ix<argc; ix++) {
             var form = vmfunc.localsindex[ix];
             if (form === undefined)
                 break;
             if (form.size === 4)
-                frame.locals[form.pos] = tempcallargs[ix];
+                frame.locals[form.pos] = args[ix];
             else if (form.size === 2)
-                frame.locals[form.pos] = tempcallargs[ix] & 0xFFFF;
+                frame.locals[form.pos] = args[ix] & 0xFFFF;
             else if (form.size === 1)
-                frame.locals[form.pos] = tempcallargs[ix] & 0xFF;
+                frame.locals[form.pos] = args[ix] & 0xFF;
         }
     }
 
@@ -4500,8 +4492,7 @@ function stream_num(nextcp, value, inmiddle, charnum) {
                go on the stack. */
             // push_callstub(0x12, charnum+1);
             frame.valstack.push(0x12, charnum+1, value, frame.framestart);
-            tempcallargs[0] = ch;
-            enter_function(iosysrock, 1);
+            enter_function(iosysrock, [ch]);
             return true;
         }
         break;
@@ -4725,8 +4716,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         oputil_flush_string(context);
                         oputil_push_substring_callstub(context);
                         oputil_push_callstub(context, "0x10,"+bitnum, addr);
-                        context.code.push("tempcallargs[0]="+cab.value+";");
-                        context.code.push("vm.enter_function(iosysrock, 1);");
+                        context.code.push("vm.enter_function(iosysrock, ["+cab.value+"]);");
                         retval = true;
                         done = true;
                         break;
@@ -4867,8 +4857,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         oputil_flush_string(context);
                         oputil_push_substring_callstub(context);
                         oputil_push_callstub(context, "0x10,"+bitnum, addr);
-                        context.code.push("tempcallargs[0]="+ch+";");
-                        context.code.push("vm.enter_function(iosysrock, 1);");
+                        context.code.push("vm.enter_function(iosysrock, ["+ch+"]);");
                         retval = true;
                         done = true;
                         break;
@@ -4885,8 +4874,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                         oputil_flush_string(context);
                         oputil_push_substring_callstub(context);
                         oputil_push_callstub(context, "0x10,"+bitnum, addr);
-                        context.code.push("tempcallargs[0]="+ch+";");
-                        context.code.push("vm.enter_function(iosysrock, 1);");
+                        context.code.push("vm.enter_function(iosysrock, ["+ch+"]);");
                         retval = true;
                         done = true;
                         break;
@@ -4959,13 +4947,13 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
                     context.code.push("retval = [oaddr, 0, 0];");
                     context.code.push("}");
                     context.code.push("else if (otype >= 0xC0 && otype <= 0xDF) {");
-                    var argc = 0;
+                    context.code.push("var tempcallargs = [];");
                     if (nodetype === 0x0A || nodetype === 0x0B) {
-                        argc = memmap.read4(node+4);
+                        var argc = memmap.read4(node+4);
                         for (var ix=0; ix<argc; ix++)
-                            context.code.push("tempcallargs["+ix+"]="+memmap.read4(node+8+4*ix)+";");
+                            context.code.push("tempcallargs.push("+memmap.read4(node+8+4*ix)+");");
                     }
-                    context.code.push("vm.enter_function(oaddr, "+argc+");");
+                    context.code.push("vm.enter_function(oaddr, tempcallargs);");
                     context.code.push("retval = true;");
                     context.code.push("}");
                     context.code.push("else {");
@@ -4998,8 +4986,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
             addr++;
             if (ch !== 0) {
                 oputil_push_callstub(context, "0x13,0", addr);
-                context.code.push("tempcallargs[0]="+ch+";");
-                context.code.push("vm.enter_function(iosysrock, 1);");
+                context.code.push("vm.enter_function(iosysrock, ["+ch+"]);");
                 retval = true;
             }
             else {
@@ -5027,8 +5014,7 @@ function compile_string(curiosys, startaddr, inmiddle, startbitnum) {
             addr+=4;
             if (ch !== 0) {
                 oputil_push_callstub(context, "0x14,0", addr);
-                context.code.push("tempcallargs[0]="+ch+";");
-                context.code.push("vm.enter_function(iosysrock, 1);");
+                context.code.push("vm.enter_function(iosysrock, ["+ch+"]);");
                 retval = true;
             }
             else {
@@ -5409,7 +5395,6 @@ var stack; /* array of StackFrames */
 var frame; /* the top of the stack */
 var vm_started = false; /* Quixe is initialized */
 var vm_stopped = false; /* Quixe has shut down */
-var tempcallargs; /* only used momentarily, for enter_function() */
 var done_executing; /* signals that we've quit *or* paused for interaction */
 
 var vmfunc_table; /* maps addresses to VMFuncs */
@@ -5508,7 +5493,6 @@ VM.prototype.setup = function() {
     vmtextenv_table = {};
     decoding_tree = undefined;
     vmstring_table = undefined;
-    tempcallargs = Array(8);
     set_random(0);
 
     endmem = origendmem;
@@ -5554,7 +5538,7 @@ VM.prototype.restart = function() {
     /* Note that we do not reset the protection range. */
 
     /* Push the first function call. (No arguments.) */
-    this.enter_function(this.startfuncaddr, 0);
+    this.enter_function(this.startfuncaddr, []);
     qlog(this.stack, stack);
 
     /* We're now ready to execute. */
