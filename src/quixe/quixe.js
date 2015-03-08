@@ -559,6 +559,7 @@ function VM() {
     this.glk = Glk;
     this.dispatcher = GiDispa;
 
+    // TODO these aren't useful default values; maybe consolidate this with setup()
     this.memmap = undefined;
     // TODO refs to globals
     // TODO need to fix places that mutate this
@@ -568,6 +569,8 @@ function VM() {
     /* The VM registers. */
     this.pc = undefined;
     this.endmem = undefined;
+
+    this.undostack = [];     // array of VM state snapshots.
 }
 
 VM.prototype.add_frame = function(frame_) {
@@ -2100,7 +2103,7 @@ var opcode_table = {
         oputil_unload_offstate(context);
         context.varsused["ix"] = true;
         oputil_push_callstub(context, operands[1]);
-        context.code.push("ix = vm_save("+operands[0]+");");
+        context.code.push("ix = vm.vm_save("+operands[0]+");");
         context.code.push("vm.pop_callstub(ix ? 0 : 1);");
         context.code.push("return;");
         context.path_ends = true;
@@ -2108,7 +2111,7 @@ var opcode_table = {
 
     0x124: function(context, operands) { /* restore */
         oputil_unload_offstate(context);
-        context.code.push("if (vm_restore("+operands[0]+")) {");
+        context.code.push("if (vm.vm_restore("+operands[0]+")) {");
         /* Succeeded. Pop the call stub that save pushed, using -1
            to indicate success. */
         context.code.push("vm.pop_callstub((-1)>>>0);");
@@ -2125,7 +2128,7 @@ var opcode_table = {
     0x125: function(context, operands) { /* saveundo */
         oputil_unload_offstate(context);
         oputil_push_callstub(context, operands[0]);
-        context.code.push("vm_saveundo();");
+        context.code.push("vm.vm_saveundo();");
         /* Any failure was a fatal error, so we return success. */
         context.code.push("vm.pop_callstub(0);");
         context.code.push("return;");
@@ -2134,7 +2137,7 @@ var opcode_table = {
 
     0x126: function(context, operands) { /* restoreundo */
         oputil_unload_offstate(context);
-        context.code.push("if (vm_restoreundo()) {");
+        context.code.push("if (vm.vm_restoreundo()) {");
         /* Succeeded. Pop the call stub that saveundo pushed, using -1
            to indicate success. */
         context.code.push("vm.pop_callstub((-1)>>>0);");
@@ -5428,7 +5431,7 @@ var stringtable;
 var protectstart, protectend;
 var iosysmode, iosysrock;
 
-var undostack;     // array of VM state snapshots.
+//var undostack;
 var resumefuncop, resumevalue;
 
 /* Memory allocation heap. Blocks have "addr" and "size" properties. */
@@ -5505,7 +5508,7 @@ VM.prototype.setup = function() {
     this.endmem = origendmem;
     stringtable = 0;
 
-    undostack = [];
+    this.undostack = [];
 
     heapstart = 0;
     usedlist = [];
@@ -5651,7 +5654,7 @@ function unpack_iff_chunks(bytes) {
 /* Writes a snapshot of the VM state to the given Glk stream. Returns true
    on success.
 */
-function vm_save(streamid) {
+VM.prototype.vm_save = function(streamid) {
     ;;;if (this.memmap.length !== this.endmem) {
     ;;;    fatal_error("Memory length was incorrect before save."); //assert
     ;;;}
@@ -5702,12 +5705,12 @@ function vm_save(streamid) {
     //qlog("vm_save: writing " + quetzal.length + " bytes");
     Glk.glk_put_buffer_stream(str, quetzal);
     return true;
-}
+};
 
 /* Reads a VM state snapshot from the given Glk stream and restores it.
    Returns true on success.
 */
-function vm_restore(streamid) {
+VM.prototype.vm_restore = function(streamid) {
     if (iosysmode !== 2)
         fatal_error("Streams are only available in Glk I/O system.");
 
@@ -5828,12 +5831,12 @@ function vm_restore(streamid) {
 
     paste_protected_range(protect);
     return true;
-}
+};
 
 /* Pushes a snapshot of the VM state onto the undo stack. If there are too
    many on the stack, throw away the oldest.
 */
-function vm_saveundo() {
+VM.prototype.vm_saveundo = function() {
     ;;;if (this.memmap.length !== this.endmem) {
     ;;;    fatal_error("Memory length was incorrect before saveundo."); //assert
     ;;;}
@@ -5851,20 +5854,20 @@ function vm_saveundo() {
     snapshot.usedlist = usedlist.slice(0);
     snapshot.freelist = freelist.slice(0);
 
-    undostack.push(snapshot);
-    if (undostack.length > 10) {
-        undostack.shift();
+    this.undostack.push(snapshot);
+    if (this.undostack.length > 10) {
+        this.undostack.shift();
     }
-}
+};
 
 /* Pops a VM state snapshot from the undo stack (if possible) and restores it.
    Returns true on success.
 */
-function vm_restoreundo() {
-    if (undostack.length === 0) {
+VM.prototype.vm_restoreundo = function() {
+    if (this.undostack.length === 0) {
         return false;
     }
-    var snapshot = undostack.pop();
+    var snapshot = this.undostack.pop();
     var protect = copy_protected_range();
 
     this.memmap = this.memmap.slice(0, ramstart).concat(snapshot.ram);
@@ -5885,7 +5888,7 @@ function vm_restoreundo() {
     ;;;assert_heap_valid(); //assert
 
     return true;
-}
+};
 
 /* Change the size of the memory map. The internal flag should be true
    only when the heap-allocation system is calling.
